@@ -1,24 +1,22 @@
-"""`fasthamer-setup` — one-time interactive setup.
+"""`fasthamer-setup` — one-time setup.
 
-Asks for your MANO account credentials (register at https://mano.is.tue.mpg.de),
-downloads MANO v1.2 from the official MPI server, then fetches the prebuilt
-CoreML model bundle into the fasthamer cache. After this, `fasthamer.load()`
-works offline.
+Confirms you have accepted the MANO license (register at
+https://mano.is.tue.mpg.de), then downloads the prebuilt CoreML model bundle
+into the fasthamer cache. After this, `fasthamer.load()` works offline.
 
-Non-interactive use:  MANO_USERNAME=... MANO_PASSWORD=... fasthamer-setup
+Non-interactive use:  FASTHAMER_ACCEPT_MANO_LICENSE=1 fasthamer-setup
 """
 import argparse
 import sys
 
-from .assets import (cache_dir, ensure_mano_license, mano_pkl_path,
-                     resolve_model_dir)
+from .assets import cache_dir, ensure_mano_license, resolve_model_dir
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="fasthamer-setup",
-        description="Download the MANO model (with your own MPI credentials) "
-                    "and the fasthamer CoreML bundle into the cache.")
+        description="Confirm the MANO license and download the fasthamer "
+                    "CoreML model bundle into the cache.")
     ap.parse_args(argv)
 
     try:
@@ -30,7 +28,6 @@ def main(argv=None) -> int:
     print(f"[fasthamer] setup complete.\n"
           f"  cache:      {cache_dir()}\n"
           f"  model:      {bundle}\n"
-          f"  MANO pkl:   {mano_pkl_path()}\n"
           f"Try it:  python -c \"import fasthamer; print(fasthamer.load())\"")
     return 0
 

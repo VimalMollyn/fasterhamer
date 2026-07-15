@@ -4,13 +4,12 @@ The CoreML model has MANO mesh data baked into its weights. MANO is
 license-gated (https://mano.is.tue.mpg.de), so fasthamer never bundles it in
 the wheel. Instead, on first use (or via the `fasthamer-setup` command):
 
-  1. You are asked for your MANO account credentials, and MANO v1.2 is
-     downloaded from the official MPI server — registering there is how you
-     accept the MANO license. The raw MANO_RIGHT.pkl is kept in the cache
-     (handy for driving smplx/MANO with fasthamer's predicted parameters).
+  1. You confirm (once) that you have registered at https://mano.is.tue.mpg.de
+     and accepted the MANO license — a quick acknowledgment, no large download.
   2. The prebuilt CoreML bundle is then downloaded into the cache.
 
-Non-interactive environments can set MANO_USERNAME / MANO_PASSWORD instead.
+Non-interactive environments accept the license by setting
+FASTHAMER_ACCEPT_MANO_LICENSE=1.
 
 Resolution order for the model bundle directory:
   1. `model_dir=` argument to `fasthamer.load()` / `HandMesh()`
@@ -25,8 +24,6 @@ import os
 import shutil
 import sys
 import tempfile
-import urllib.error
-import urllib.parse
 import urllib.request
 import zipfile
 from typing import Optional
@@ -41,14 +38,9 @@ ASSETS_SHA256: Optional[str] = \
 MODEL_NAME = "hamer_mano.mlpackage"
 FACES_NAME = "mano_faces.npy"
 
-# Official MANO download. Unlike the SMPL-X download server, the MANO site
-# does not accept POSTed credentials on download.is.tue.mpg.de — the working
-# flow is a website login (session cookie) followed by the same-origin
-# download/dl.php fetch. Requires an account at https://mano.is.tue.mpg.de.
-MANO_LOGIN_URL = "https://mano.is.tue.mpg.de/login.php"
-MANO_URL = ("https://mano.is.tue.mpg.de/download/dl.php"
-            "?domain=mano&resume=1&sfile=mano_v1_2.zip")
-MANO_PKL_IN_ZIP = "mano_v1_2/models/MANO_RIGHT.pkl"
+MANO_URL = "https://mano.is.tue.mpg.de"
+# Env var to accept the MANO license non-interactively (CI, scripts).
+MANO_ACCEPT_ENV = "FASTHAMER_ACCEPT_MANO_LICENSE"
 
 
 def cache_dir() -> str:
@@ -56,8 +48,8 @@ def cache_dir() -> str:
     return os.path.join(base, "fasthamer")
 
 
-def mano_pkl_path() -> str:
-    return os.path.join(cache_dir(), "mano", "MANO_RIGHT.pkl")
+def _license_marker() -> str:
+    return os.path.join(cache_dir(), "mano_license_accepted")
 
 
 def _is_bundle(path: str) -> bool:
@@ -73,13 +65,9 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def _download(url: str, dest: str, label: str, opener=None) -> None:
-    if opener is not None:
-        # openers carry their own headers (and cookies)
-        open_ctx = opener.open(url)
-    else:
-        open_ctx = urllib.request.urlopen(
-            urllib.request.Request(url, headers={"User-Agent": "fasthamer"}))
+def _download(url: str, dest: str, label: str) -> None:
+    open_ctx = urllib.request.urlopen(
+        urllib.request.Request(url, headers={"User-Agent": "fasthamer"}))
     with open_ctx as resp, open(dest, "wb") as f:
         total = int(resp.headers.get("Content-Length") or 0)
         got = 0
@@ -99,96 +87,46 @@ def _download(url: str, dest: str, label: str, opener=None) -> None:
     sys.stderr.write("\n")
 
 
-def _looks_like_error_page(path: str) -> bool:
-    """MPI's download.php returns an HTML page (200) on bad credentials or a
-    not-accepted license, instead of an HTTP error."""
-    if not os.path.isfile(path) or os.path.getsize(path) == 0:
-        return True
-    with open(path, "rb") as f:
-        head = f.read(256).lower()
-    return (b"<!doctype html" in head or b"<html" in head
-            or b"error: file not found." in head)
+def ensure_mano_license(interactive: Optional[bool] = None) -> None:
+    """Make sure the user has acknowledged the MANO license before the
+    MANO-derived model bundle is downloaded. The acknowledgment is recorded in
+    the cache so it is only asked once. Honors FASTHAMER_ACCEPT_MANO_LICENSE=1
+    for non-interactive use."""
+    if os.path.isfile(_license_marker()):
+        return
+    if os.environ.get(MANO_ACCEPT_ENV, "").strip().lower() in ("1", "true", "yes"):
+        _record_license_acceptance()
+        return
+
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if not interactive:
+        raise RuntimeError(
+            "fasthamer is built on the license-gated MANO hand model. "
+            "Register and accept the license at https://mano.is.tue.mpg.de, "
+            f"then set {MANO_ACCEPT_ENV}=1 (or run `fasthamer-setup` in a "
+            "terminal) to confirm.")
+
+    sys.stderr.write(
+        "\nfasthamer first-run setup\n"
+        "-------------------------\n"
+        "fasthamer is built on the MANO hand model, which is free for\n"
+        "non-commercial research but license-gated. Before downloading the\n"
+        "model, please confirm that you have registered at\n"
+        "https://mano.is.tue.mpg.de and accepted the MANO license.\n\n")
+    reply = input("Have you registered and accepted the MANO license? [y/N]: ")
+    if reply.strip().lower() not in ("y", "yes"):
+        raise RuntimeError(
+            "MANO license not confirmed. Register and accept it at "
+            "https://mano.is.tue.mpg.de, then re-run.")
+    _record_license_acceptance()
 
 
-def download_mano(username: str, password: str) -> str:
-    """Log in on the official MANO website with the user's own credentials,
-    download MANO v1.2, and stash MANO_RIGHT.pkl in the cache. Returns the
-    pkl path."""
-    import http.cookiejar
-    dest = mano_pkl_path()
-    if os.path.isfile(dest):
-        return dest
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    # The MANO download endpoint 403s unrecognized User-Agents; the generic
-    # browser UA is the one their server accepts.
-    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
-    creds = urllib.parse.urlencode({"username": username, "password": password,
-                                    "commit": "Log in"}).encode()
+def _record_license_acceptance() -> None:
     os.makedirs(cache_dir(), exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=cache_dir()) as tmp:
-        zip_path = os.path.join(tmp, "mano_v1_2.zip")
-        try:
-            # GET first to establish the session cookie, then log in with it.
-            opener.open(MANO_LOGIN_URL).read()
-            opener.open(MANO_LOGIN_URL, data=creds).read()
-            _download(MANO_URL, zip_path, "MANO v1.2 (official MPI server)",
-                      opener=opener)
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                raise PermissionError(
-                    "the MANO server rejected the credentials — check them, "
-                    "and that you registered (and accepted the license) at "
-                    "https://mano.is.tue.mpg.de") from e
-            raise
-        if _looks_like_error_page(zip_path) or not zipfile.is_zipfile(zip_path):
-            raise PermissionError(
-                "the MANO server returned a web page instead of the model — "
-                "check your credentials, and that you registered (and "
-                "accepted the license) at https://mano.is.tue.mpg.de")
-        with zipfile.ZipFile(zip_path) as zf:
-            names = [n for n in zf.namelist() if n.endswith("MANO_RIGHT.pkl")]
-            if MANO_PKL_IN_ZIP in zf.namelist():
-                member = MANO_PKL_IN_ZIP
-            elif names:
-                member = names[0]
-            else:
-                raise RuntimeError("MANO_RIGHT.pkl not found in the downloaded "
-                                   "mano_v1_2.zip (unexpected archive layout)")
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with zf.open(member) as src, open(dest, "wb") as out:
-                shutil.copyfileobj(src, out)
-    return dest
-
-
-def ensure_mano_license(interactive: Optional[bool] = None) -> str:
-    """Make sure MANO has been obtained with the user's own MPI account.
-    Prompts for credentials on a TTY; honors MANO_USERNAME / MANO_PASSWORD."""
-    dest = mano_pkl_path()
-    if os.path.isfile(dest):
-        return dest
-
-    username = os.environ.get("MANO_USERNAME")
-    password = os.environ.get("MANO_PASSWORD")
-    if not (username and password):
-        if interactive is None:
-            interactive = sys.stdin.isatty()
-        if not interactive:
-            raise RuntimeError(
-                "fasthamer needs the license-gated MANO model on first use. "
-                "Run `fasthamer-setup` in a terminal, or set the "
-                "MANO_USERNAME / MANO_PASSWORD environment variables "
-                "(register at https://mano.is.tue.mpg.de)")
-        import getpass
-        sys.stderr.write(
-            "\nfasthamer first-run setup\n"
-            "-------------------------\n"
-            "The MANO hand model is license-gated. Enter the account you\n"
-            "registered at https://mano.is.tue.mpg.de (sign up there first\n"
-            "if you have not — it is free for research use).\n\n")
-        username = input("Email (MANO account): ").strip()
-        password = getpass.getpass("Password (MANO account): ")
-    return download_mano(username, password)
+    with open(_license_marker(), "w") as f:
+        f.write("MANO license acknowledged via fasthamer "
+                "(https://mano.is.tue.mpg.de)\n")
 
 
 def _fetch_bundle(dest: str) -> None:

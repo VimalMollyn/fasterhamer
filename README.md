@@ -21,26 +21,27 @@ Requires macOS on Apple Silicon.
 
 ## Install
 
+> **MANO license required.** fasthamer is built on the
+> [MANO](https://mano.is.tue.mpg.de) hand model, which is free for
+> non-commercial research but license-gated. Before installing, create an
+> account at https://mano.is.tue.mpg.de and **sign/accept the MANO license**
+> there. The CoreML model bundle has MANO-derived data baked into its weights,
+> so by using fasthamer you agree to use it only under the terms of that
+> license.
+
 ```bash
 pip install "git+https://github.com/VimalMollyn/fasterhamer"   # or: pip install fasthamer (once on PyPI)
 fasthamer-setup
 ```
 
-> **MANO license required.** fasthamer is built on the
-> [MANO](https://mano.is.tue.mpg.de) hand model, which is free for
-> non-commercial research but license-gated: before installing, create an
-> account at https://mano.is.tue.mpg.de and **sign/accept the MANO license**
-> there. By using fasthamer you agree to use it only under the terms of that
-> license.
+`fasthamer-setup` runs once: it asks you to confirm you've accepted the MANO
+license, then downloads the prebuilt CoreML model bundle (~470 MB) into
+`~/.cache/fasthamer`. If you skip this step, the same prompt runs on your
+first `fasthamer.load()`.
 
-`fasthamer-setup` runs once: it asks for your MANO account credentials and
-downloads MANO v1.2 from the official MPI server — this doubles as
-fasthamer's check that you actually hold a signed MANO license, since the
-CoreML model bundle it then fetches (~470 MB, into `~/.cache/fasthamer`) has
-MANO-derived data baked into its weights. If you skip this step, the same
-flow runs interactively on your first `fasthamer.load()`.
-
-Non-interactive environments: `MANO_USERNAME=... MANO_PASSWORD=... fasthamer-setup`.
+Non-interactive environments (CI, scripts): set
+`FASTHAMER_ACCEPT_MANO_LICENSE=1` to acknowledge the license, e.g.
+`FASTHAMER_ACCEPT_MANO_LICENSE=1 fasthamer-setup`.
 
 ## Quickstart
 
@@ -132,7 +133,7 @@ supersampled anti-aliasing, compiled once on first use.
 Code: MIT. The model weights are derived from the HaMeR checkpoint and the
 MANO model; MANO is licensed by the Max Planck Institute for non-commercial
 scientific research — you must register at https://mano.is.tue.mpg.de (which
-the first-run setup enforces) and comply with its
+the first-run setup asks you to confirm) and comply with its
 [license](https://mano.is.tue.mpg.de/license.html). Cite
 [HaMeR](https://arxiv.org/abs/2312.05251) and
 [MANO](https://mano.is.tue.mpg.de) in academic work.
