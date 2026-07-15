@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fasthamer"
+version = "0.1.0"
+description = "Realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine: image in, MANO parameters + 3D/2D joints out"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "Vimal Mollyn", email = "vmollyn@andrew.cmu.edu" }]
+keywords = ["hand-tracking", "mano", "hamer", "coreml", "neural-engine", "3d-hand-pose"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "coremltools>=8.0",
+    "fasthands>=0.3.0",
+]
+
+[project.optional-dependencies]
+mediapipe = ["mediapipe>=0.10"]
+
+[project.urls]
+Homepage = "https://github.com/VimalMollyn/fasterhamer"
+
+[project.scripts]
+fasthamer-setup = "fasthamer.setup_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fasthamer = ["fast_render.c"]
