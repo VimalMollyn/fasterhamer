@@ -1,5 +1,9 @@
 """Realtime webcam demo: 3D hand mesh overlay via fasthamer.
 
+This is the minimal, easy-to-read version: a plain synchronous capture loop.
+If it feels laggy, use webcam_threaded_demo.py instead — it adds a
+freshest-frame camera thread and a worker/display split for much lower latency.
+
     python webcam_demo.py                 # mesh overlay, mirrored view
     python webcam_demo.py --skeleton      # 2D joints instead of mesh
     python webcam_demo.py --camera-id 0

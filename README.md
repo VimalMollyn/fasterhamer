@@ -81,9 +81,18 @@ while True:
     result = hands(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 ```
 
-See [`examples/webcam_demo.py`](examples/webcam_demo.py) for a complete
-realtime demo and [`examples/image_demo.py`](examples/image_demo.py) for the
-single-image version.
+Examples:
+
+- [`examples/image_demo.py`](examples/image_demo.py) — single image in, mesh +
+  skeleton overlay out.
+- [`examples/webcam_demo.py`](examples/webcam_demo.py) — minimal synchronous
+  webcam loop (easiest to read).
+- [`examples/webcam_threaded_demo.py`](examples/webcam_threaded_demo.py) —
+  **low-latency** webcam demo: a background camera thread always serves the
+  freshest frame, and a worker/display split keeps the window responsive while
+  the mesh stays aligned to the frame it was computed on. Use this one if the
+  simple demo feels laggy (`cv2.VideoCapture` otherwise hands you buffered,
+  stale frames). Supports `--no-display --max-frames N` for benchmarking.
 
 ## Conventions
 
