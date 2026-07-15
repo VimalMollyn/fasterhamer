@@ -26,11 +26,18 @@ pip install "git+https://github.com/VimalMollyn/fasterhamer"   # or: pip install
 fasthamer-setup
 ```
 
-`fasthamer-setup` runs once: it asks for your
-[MANO](https://mano.is.tue.mpg.de) account credentials (the MANO hand model is
-license-gated — register there first, it's free for research), downloads MANO
-v1.2 from the official MPI server, then fetches the prebuilt CoreML model
-bundle (~470 MB) into `~/.cache/fasthamer`. If you skip this step, the same
+> **MANO license required.** fasthamer is built on the
+> [MANO](https://mano.is.tue.mpg.de) hand model, which is free for
+> non-commercial research but license-gated: before installing, create an
+> account at https://mano.is.tue.mpg.de and **sign/accept the MANO license**
+> there. By using fasthamer you agree to use it only under the terms of that
+> license.
+
+`fasthamer-setup` runs once: it asks for your MANO account credentials and
+downloads MANO v1.2 from the official MPI server — this doubles as
+fasthamer's check that you actually hold a signed MANO license, since the
+CoreML model bundle it then fetches (~470 MB, into `~/.cache/fasthamer`) has
+MANO-derived data baked into its weights. If you skip this step, the same
 flow runs interactively on your first `fasthamer.load()`.
 
 Non-interactive environments: `MANO_USERNAME=... MANO_PASSWORD=... fasthamer-setup`.
