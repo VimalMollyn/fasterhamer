@@ -41,9 +41,12 @@ ASSETS_SHA256: Optional[str] = \
 MODEL_NAME = "hamer_mano.mlpackage"
 FACES_NAME = "mano_faces.npy"
 
-# Official MANO download (same download.php wire format the SMPL-X/MANO
-# fetch scripts use). Requires an account at https://mano.is.tue.mpg.de.
-MANO_URL = ("https://download.is.tue.mpg.de/download.php"
+# Official MANO download. Unlike the SMPL-X download server, the MANO site
+# does not accept POSTed credentials on download.is.tue.mpg.de — the working
+# flow is a website login (session cookie) followed by the same-origin
+# download/dl.php fetch. Requires an account at https://mano.is.tue.mpg.de.
+MANO_LOGIN_URL = "https://mano.is.tue.mpg.de/login.php"
+MANO_URL = ("https://mano.is.tue.mpg.de/download/dl.php"
             "?domain=mano&resume=1&sfile=mano_v1_2.zip")
 MANO_PKL_IN_ZIP = "mano_v1_2/models/MANO_RIGHT.pkl"
 
@@ -70,10 +73,14 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def _download(url: str, dest: str, label: str, post: Optional[bytes] = None) -> None:
-    req = urllib.request.Request(url, data=post,
-                                 headers={"User-Agent": "fasthamer"})
-    with urllib.request.urlopen(req) as resp, open(dest, "wb") as f:
+def _download(url: str, dest: str, label: str, opener=None) -> None:
+    if opener is not None:
+        # openers carry their own headers (and cookies)
+        open_ctx = opener.open(url)
+    else:
+        open_ctx = urllib.request.urlopen(
+            urllib.request.Request(url, headers={"User-Agent": "fasthamer"}))
+    with open_ctx as resp, open(dest, "wb") as f:
         total = int(resp.headers.get("Content-Length") or 0)
         got = 0
         while True:
@@ -104,18 +111,29 @@ def _looks_like_error_page(path: str) -> bool:
 
 
 def download_mano(username: str, password: str) -> str:
-    """Download MANO v1.2 from the official MPI server with the user's own
-    credentials and stash MANO_RIGHT.pkl in the cache. Returns the pkl path."""
+    """Log in on the official MANO website with the user's own credentials,
+    download MANO v1.2, and stash MANO_RIGHT.pkl in the cache. Returns the
+    pkl path."""
+    import http.cookiejar
     dest = mano_pkl_path()
     if os.path.isfile(dest):
         return dest
-    post = urllib.parse.urlencode(
-        {"username": username, "password": password}).encode()
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    # The MANO download endpoint 403s unrecognized User-Agents; the generic
+    # browser UA is the one their server accepts.
+    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+    creds = urllib.parse.urlencode({"username": username, "password": password,
+                                    "commit": "Log in"}).encode()
     os.makedirs(cache_dir(), exist_ok=True)
     with tempfile.TemporaryDirectory(dir=cache_dir()) as tmp:
         zip_path = os.path.join(tmp, "mano_v1_2.zip")
         try:
-            _download(MANO_URL, zip_path, "MANO v1.2 (official MPI server)", post=post)
+            # GET first to establish the session cookie, then log in with it.
+            opener.open(MANO_LOGIN_URL).read()
+            opener.open(MANO_LOGIN_URL, data=creds).read()
+            _download(MANO_URL, zip_path, "MANO v1.2 (official MPI server)",
+                      opener=opener)
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 raise PermissionError(
@@ -123,11 +141,11 @@ def download_mano(username: str, password: str) -> str:
                     "and that you registered (and accepted the license) at "
                     "https://mano.is.tue.mpg.de") from e
             raise
-        if _looks_like_error_page(zip_path):
+        if _looks_like_error_page(zip_path) or not zipfile.is_zipfile(zip_path):
             raise PermissionError(
-                "the MANO server returned an error page — check your "
-                "credentials and that you registered (and accepted the "
-                "license) at https://mano.is.tue.mpg.de")
+                "the MANO server returned a web page instead of the model — "
+                "check your credentials, and that you registered (and "
+                "accepted the license) at https://mano.is.tue.mpg.de")
         with zipfile.ZipFile(zip_path) as zf:
             names = [n for n in zf.namelist() if n.endswith("MANO_RIGHT.pkl")]
             if MANO_PKL_IN_ZIP in zf.namelist():
