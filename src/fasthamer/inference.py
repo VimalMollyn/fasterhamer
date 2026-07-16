@@ -1,23 +1,76 @@
 """CoreML inference for the full HaMeR model (ViT-H backbone + MANO head + MANO
 mesh in one mlpackage) on the Apple Neural Engine. Pure numpy I/O — no torch."""
+import hashlib
 import os
+import shutil
+import sys
 from typing import Dict, List
 
 import cv2
 import numpy as np
 
-from .assets import FACES_NAME, MODEL_NAME
+from .assets import FACES_NAME, MODEL_NAME, cache_dir
 from .preprocess import HandCrop, IMAGE_SIZE
+
+
+def _compiled_cache_path(mlpackage_path: str) -> str:
+    """Stable, per-mlpackage location for the compiled .mlmodelc."""
+    key = hashlib.sha1(os.path.abspath(mlpackage_path).encode()).hexdigest()[:12]
+    return os.path.join(cache_dir(), "compiled", f"hamer_mano_{key}.mlmodelc")
+
+
+def _load_prediction_model(mlpackage_path: str, units):
+    """Load the CoreML model for prediction, compiling the mlpackage to a
+    persistent .mlmodelc on first use and reusing it thereafter.
+
+    coremltools' `MLModel(mlpackage)` recompiles on every load — it compiles to
+    a fresh temp directory each time, and Core ML keys its on-disk compile cache
+    by path, so the cache always misses (~15 s per load). We instead compile
+    once to a stable path and load a `CompiledMLModel` from there; the OS also
+    caches the Neural Engine compilation against that path, so every later
+    process loads in ~0.1 s.
+    """
+    import coremltools as ct
+    compiled = _compiled_cache_path(mlpackage_path)
+    if os.path.isdir(compiled):
+        try:
+            return ct.models.CompiledMLModel(compiled, compute_units=units)
+        except Exception:
+            shutil.rmtree(compiled, ignore_errors=True)  # stale/corrupt; rebuild
+
+    sys.stderr.write("[fasthamer] compiling the model for your device "
+                     "(one-time, ~30 s; cached for next time)...\n")
+    sys.stderr.flush()
+    # Compile the mlpackage to a .mlmodelc once. CPU_ONLY keeps this step light
+    # and avoids a wasted Neural Engine warm-up on the throwaway temp path — the
+    # .mlmodelc is compute-unit-agnostic, so it still runs on the ANE below.
+    src_model = ct.models.MLModel(mlpackage_path,
+                                  compute_units=ct.ComputeUnit.CPU_ONLY)
+    try:
+        src = src_model.get_compiled_model_path()  # valid while src_model alive
+        os.makedirs(os.path.dirname(compiled), exist_ok=True)
+        tmp = compiled + ".tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(src, tmp)
+        os.replace(tmp, compiled)
+    except Exception:
+        # Caching failed (e.g. a read-only cache dir) — fall back to a normal
+        # in-place load with the requested compute units (slow, but works).
+        return ct.models.MLModel(mlpackage_path, compute_units=units)
+    # Load from the persistent path so the OS caches the ANE compilation there.
+    return ct.models.CompiledMLModel(compiled, compute_units=units)
 
 
 class CoreMLHamer:
     def __init__(self, model_dir: str, compute_units: str = "CPU_AND_NE"):
         import coremltools as ct
         units = getattr(ct.ComputeUnit, compute_units)
-        self.model = ct.models.MLModel(os.path.join(model_dir, MODEL_NAME),
-                                       compute_units=units)
+        mlpackage = os.path.join(model_dir, MODEL_NAME)
+        # Read the spec cheaply (no compile) for I/O metadata, then load the
+        # prediction model via the compile-once cache.
+        spec = ct.models.MLModel(mlpackage, skip_model_load=True).get_spec().description
+        self.model = _load_prediction_model(mlpackage, units)
         self.faces = np.load(os.path.join(model_dir, FACES_NAME))
-        spec = self.model.get_spec().description
         shape = spec.input[0].type.multiArrayType.shape
         self.in_h, self.in_w = int(shape[-2]), int(shape[-1])
         self.full_input = (self.in_h == IMAGE_SIZE and self.in_w == IMAGE_SIZE)

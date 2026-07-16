@@ -39,6 +39,10 @@ license, then downloads the prebuilt CoreML model bundle (~470 MB) into
 `~/.cache/fasthamer`. If you skip this step, the same prompt runs on your
 first `fasthamer.load()`.
 
+The **first** `fasthamer.load()` also compiles the model for your device
+(~30 s, one-time) and caches the compiled `.mlmodelc`; every load after that
+takes a couple of seconds.
+
 Non-interactive environments (CI, scripts): set
 `FASTHAMER_ACCEPT_MANO_LICENSE=1` to acknowledge the license, e.g.
 `FASTHAMER_ACCEPT_MANO_LICENSE=1 fasthamer-setup`.
