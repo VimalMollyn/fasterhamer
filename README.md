@@ -30,7 +30,7 @@ Requires macOS on Apple Silicon.
 > license.
 
 ```bash
-pip install "git+https://github.com/VimalMollyn/fasterhamer"   # or: pip install fasthamer (once on PyPI)
+pip install fasthamer
 fasthamer-setup
 ```
 
