@@ -83,6 +83,11 @@ def main():
     ap.add_argument("--max-hands", type=int, default=2)
     ap.add_argument("--skeleton", action="store_true", help="draw 2D joints, no mesh")
     ap.add_argument("--no-flip", action="store_true", help="do not mirror the view")
+    ap.add_argument("--stabilize", action="store_true",
+                    help="lock each hand's Right/Left label across frames "
+                         "(stops handedness flicker mirroring the mesh)")
+    ap.add_argument("--force-handedness", default=None, choices=["right", "left"],
+                    help="pin handedness outright (e.g. single-hand egocentric rigs)")
     ap.add_argument("--model-dir", default=None)
     ap.add_argument("--no-display", action="store_true",
                     help="headless: don't open a window (for benchmarking)")
@@ -91,7 +96,9 @@ def main():
     args = ap.parse_args()
 
     hands = fasthamer.load(mode="video", max_hands=args.max_hands,
-                           model_dir=args.model_dir)
+                           model_dir=args.model_dir,
+                           stabilize_handedness=args.stabilize,
+                           force_handedness=args.force_handedness)
 
     cap = ThreadedCamera(args.camera_id, args.width, args.height)
     if not cap.isOpened():

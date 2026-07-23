@@ -9,6 +9,7 @@ from .detection import make_detector
 from .inference import CoreMLHamer
 from .preprocess import cam_crop_to_full, preprocess_hands, scaled_focal_length
 from .rendering import MESH_COLOR, MeshRenderer
+from .stabilize import HandednessStabilizer
 from .types import Hand, HandMeshResult
 
 
@@ -39,6 +40,19 @@ class HandMesh:
         rescale_factor: hand-box padding before cropping (HaMeR default 2.0).
         swap_handedness: flip left/right labels (use for mirrored inputs
             where handedness looks inverted).
+        stabilize_handedness: video mode only — lock each hand's Right/Left
+            label across frames via IoU tracking, so a spatially continuous
+            hand keeps the label it first appeared with instead of flickering.
+            The locked label drives the crop mirroring and geometry
+            un-mirroring, not just the reported `is_right`. No-op in image mode.
+        handedness_iou: min IoU for a detection to be considered the same hand
+            as an existing track (stabilizer).
+        handedness_ttl: drop a track after this many consecutive unseen frames
+            (stabilizer), so a genuinely new hand can re-acquire.
+        force_handedness: "right" or "left" — override every detection's
+            handedness with a constant. For rigs where handedness is known and
+            fixed (e.g. single-hand egocentric/wrist cameras). Takes precedence
+            over the stabilizer.
         compute_units: CoreML compute units, e.g. "CPU_AND_NE" (default),
             "ALL", "CPU_ONLY".
     """
@@ -46,16 +60,25 @@ class HandMesh:
     def __init__(self, mode: str = "image", max_hands: int = 2,
                  detector: str = "fasthands", model_dir: Optional[str] = None,
                  rescale_factor: float = 2.0, swap_handedness: bool = False,
+                 stabilize_handedness: bool = False,
+                 handedness_iou: float = 0.3, handedness_ttl: int = 10,
+                 force_handedness: Optional[str] = None,
                  compute_units: str = "CPU_AND_NE", **detector_kwargs):
         if mode not in ("image", "video"):
             raise ValueError(f"mode must be 'image' or 'video', got '{mode}'")
+        if force_handedness not in (None, "right", "left"):
+            raise ValueError("force_handedness must be 'right', 'left', or None, "
+                             f"got '{force_handedness}'")
         self.mode = mode
         self.rescale_factor = float(rescale_factor)
         self.swap_handedness = bool(swap_handedness)
+        self.force_handedness = force_handedness
         bundle = resolve_model_dir(model_dir)
         self.engine = CoreMLHamer(bundle, compute_units=compute_units)
         self.detector = make_detector(detector, max_hands, video=(mode == "video"),
                                       compute_units=compute_units, **detector_kwargs)
+        self._stabilizer = (HandednessStabilizer(handedness_iou, handedness_ttl)
+                            if (mode == "video" and stabilize_handedness) else None)
         self._t0 = time.monotonic()
         self._last_ts = -1
         self._renderer: Optional[MeshRenderer] = None
@@ -65,6 +88,12 @@ class HandMesh:
     def faces(self) -> np.ndarray:
         """(1538, 3) MANO triangle faces (right hand; flip winding for left)."""
         return self.engine.faces
+
+    def reset(self) -> None:
+        """Reset temporal state for a new video sequence (clears the
+        handedness-stabilizer tracks)."""
+        if self._stabilizer is not None:
+            self._stabilizer.reset()
 
     def process(self, image_rgb: np.ndarray,
                 timestamp_ms: Optional[int] = None) -> HandMeshResult:
@@ -90,6 +119,14 @@ class HandMesh:
                                                swap_handedness=self.swap_handedness)
         if not boxes:
             return result
+
+        # Handedness overrides run BEFORE preprocessing: the label drives the
+        # crop mirroring and geometry un-mirroring, so fixing it later would
+        # leave the mesh mirror-wrong on relabeled frames.
+        if self.force_handedness is not None:
+            is_right = [int(self.force_handedness == "right")] * len(boxes)
+        elif self._stabilizer is not None:
+            is_right = self._stabilizer(boxes, is_right)
 
         crops = preprocess_hands(image_rgb, np.stack(boxes), np.array(is_right),
                                  rescale_factor=self.rescale_factor)

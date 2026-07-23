@@ -124,9 +124,40 @@ fasthamer.load(
     model_dir=None,           # local bundle dir (skips download/license check)
     rescale_factor=2.0,       # hand-box padding before cropping
     swap_handedness=False,    # if handedness looks inverted (mirrored inputs)
+    stabilize_handedness=False,  # video: lock R/L per hand across frames
+    handedness_iou=0.3,       # IoU to treat a detection as the same hand
+    handedness_ttl=10,        # drop a track after N unseen frames
+    force_handedness=None,    # "right" / "left" to pin it outright
     compute_units="CPU_AND_NE",
 )
 ```
+
+### Handedness stability (video)
+
+Detectors decide Right/Left from a single frame, so on hard footage —
+foreshortened, self-occluding hands, e.g. a wrist/egocentric camera — the label
+can flicker frame to frame. **This is not cosmetic:** HaMeR is a right-hand
+model, so "left" hands are mirror-flipped before the network and un-mirrored
+after. A flickered label produces mirror-wrong *geometry* on that frame (we
+measure ~200 mm of vertex jump on an otherwise identical frame), which is why
+relabeling the output afterwards is not enough.
+
+`stabilize_handedness=True` fixes it upstream of the crop: each hand gets a
+persistent IoU-matched track, and a spatially continuous hand keeps the label it
+first appeared with — the detector is trusted only when a hand first appears.
+Tracks expire after `handedness_ttl` unseen frames so a genuinely new hand can
+re-acquire.
+
+```python
+hands = fasthamer.load(mode="video", stabilize_handedness=True)
+...
+hands.reset()      # clear tracks when the video sequence restarts
+```
+
+For rigs where handedness is known and fixed (single-hand egocentric mounts),
+`force_handedness="right"` pins every detection outright — a stronger
+constraint that takes precedence over the tracker. Both are orthogonal to
+`swap_handedness`, which is a global flip applied by the detector.
 
 `FASTHAMER_MODEL_DIR` (env) points at a local model bundle;
 `FASTHAMER_ASSETS_URL` overrides where the bundle is downloaded from.
