@@ -33,8 +33,17 @@ class HandMesh:
         mode: "image" for independent stills, "video" for tracked sequential
             frames (faster + temporally smoother detection).
         max_hands: maximum number of hands to detect.
-        detector: "fasthands" (CoreML/ANE, default) or "mediapipe"
-            (requires the fasthamer[mediapipe] extra).
+        detector: which detection stack — "fasthands" (CoreML/ANE, default)
+            or "mediapipe" (Google's MediaPipe Tasks API; requires the
+            fasthamer[mediapipe] extra).
+        fasthands_detector: which detector model *inside* fasthands (needs
+            fasthands >= 0.4.0): "whim" — the WHIM-fine-tuned full-hand-box
+            detector, steadier than the palm detector; "mediapipe" — the
+            original palm detector. None uses fasthands' own default. Only
+            valid with detector="fasthands". Note the two "mediapipe" values
+            mean different things: `detector="mediapipe"` is the separate
+            TFLite Tasks stack, `fasthands_detector="mediapipe"` is the palm
+            detector running on the ANE inside fasthands.
         model_dir: directory holding the model bundle; defaults to the
             fasthamer cache (auto-downloaded on first use).
         rescale_factor: hand-box padding before cropping (HaMeR default 2.0).
@@ -62,7 +71,9 @@ class HandMesh:
     """
 
     def __init__(self, mode: str = "image", max_hands: int = 2,
-                 detector: str = "fasthands", model_dir: Optional[str] = None,
+                 detector: str = "fasthands",
+                 fasthands_detector: Optional[str] = None,
+                 model_dir: Optional[str] = None,
                  rescale_factor: float = 2.0, swap_handedness: bool = False,
                  stabilize_handedness: bool = False,
                  handedness_iou: float = 0.3, handedness_ttl: int = 10,
@@ -81,6 +92,7 @@ class HandMesh:
         bundle = resolve_model_dir(model_dir)
         self.engine = CoreMLHamer(bundle, compute_units=compute_units)
         self.detector = make_detector(detector, max_hands, video=(mode == "video"),
+                                      fasthands_detector=fasthands_detector,
                                       compute_units=compute_units, **detector_kwargs)
         self._stabilizer = (
             HandednessStabilizer(handedness_iou, handedness_ttl,

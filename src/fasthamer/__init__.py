@@ -18,7 +18,7 @@ from .stabilize import HandednessStabilizer
 from .tracker import HandMesh, load
 from .types import HAND_EDGES, Hand, HandMeshResult
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer",
            "draw_landmarks", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
            "__version__"]

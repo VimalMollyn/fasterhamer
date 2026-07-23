@@ -8,7 +8,7 @@ boxes as a list of (4,) xyxy float32 arrays, is_right as a list of 0/1 ints.
 """
 import os
 import urllib.request
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -19,10 +19,29 @@ _HAND_TASK_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmark
 
 
 class FastHandsDetector:
+    """fasthands (MediaPipe Hands on the Neural Engine).
+
+    `model` selects fasthands' own detector model, added in fasthands 0.4.0:
+    "whim" (default) — the WHIM-fine-tuned full-hand-box detector, steadier
+    than the palm detector; "mediapipe" — the original palm detector. Both
+    feed the same landmark model. Left as None, fasthands' own default applies
+    and nothing is passed through, so older fasthands keeps working.
+    """
+
     def __init__(self, max_hands: int = 2, video: bool = True,
-                 compute_units: str = "CPU_AND_NE"):
+                 compute_units: str = "CPU_AND_NE",
+                 model: Optional[str] = None):
         import fasthands
-        self.tracker = fasthands.load(num_hands=max_hands, compute_units=compute_units)
+        kwargs = {"num_hands": max_hands, "compute_units": compute_units}
+        if model is not None:
+            import inspect
+            if "detector" not in inspect.signature(fasthands.load).parameters:
+                raise ValueError(
+                    f"fasthands_detector={model!r} requires fasthands >= 0.4.0 "
+                    f"(installed: {getattr(fasthands, '__version__', 'unknown')})."
+                    " Upgrade with:  pip install -U fasthands")
+            kwargs["detector"] = model
+        self.tracker = fasthands.load(**kwargs)
         self.video = video
 
     def detect(self, rgb: np.ndarray, timestamp_ms: int = 0,
@@ -86,10 +105,18 @@ class MediaPipeDetector:
         return boxes, is_right
 
 
-def make_detector(kind: str, max_hands: int, video: bool, **kwargs):
+def make_detector(kind: str, max_hands: int, video: bool,
+                  fasthands_detector: Optional[str] = None, **kwargs):
     if kind == "fasthands":
         return FastHandsDetector(max_hands, video,
-                                 compute_units=kwargs.get("compute_units", "CPU_AND_NE"))
+                                 compute_units=kwargs.get("compute_units", "CPU_AND_NE"),
+                                 model=fasthands_detector)
+    if fasthands_detector is not None:
+        raise ValueError(
+            f"fasthands_detector={fasthands_detector!r} only applies to "
+            f"detector='fasthands' (got detector={kind!r}). Note these name "
+            "different things: fasthamer's detector= picks the detection "
+            "stack, fasthands_detector= picks the model inside fasthands.")
     if kind == "mediapipe":
         return MediaPipeDetector(max_hands, video,
                                  det_conf=kwargs.get("det_conf", 0.5),

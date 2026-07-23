@@ -120,7 +120,8 @@ Examples:
 fasthamer.load(
     mode="image",             # or "video"
     max_hands=2,
-    detector="fasthands",     # or "mediapipe" (pip install "fasthamer[mediapipe]")
+    detector="fasthands",     # detection stack: "fasthands" or "mediapipe"
+    fasthands_detector=None,  # model inside fasthands: "whim" or "mediapipe"
     model_dir=None,           # local bundle dir (skips download/license check)
     rescale_factor=2.0,       # hand-box padding before cropping
     swap_handedness=False,    # if handedness looks inverted (mirrored inputs)
@@ -132,6 +133,32 @@ fasthamer.load(
     compute_units="CPU_AND_NE",
 )
 ```
+
+### Choosing a hand detector
+
+Two independent choices, and confusingly both offer something called
+"mediapipe" — they are not the same thing:
+
+- **`detector`** picks the detection *stack*: `"fasthands"` (default) runs
+  MediaPipe Hands ported to CoreML on the Neural Engine, ~1 ms/frame;
+  `"mediapipe"` runs Google's official MediaPipe **Tasks** API on
+  TFLite/XNNPACK/GPU (needs `pip install "fasthamer[mediapipe]"`, and exposes
+  `det_conf` / `track_conf`).
+- **`fasthands_detector`** picks the detector model *inside* fasthands
+  (requires `fasthands >= 0.4.0`): `"whim"` — the WHIM-fine-tuned
+  full-hand-box detector, steadier than the palm detector; `"mediapipe"` —
+  the original palm detector. Left as `None`, fasthands' own default (`whim`)
+  applies.
+
+```python
+hands = fasthamer.load(mode="video", fasthands_detector="mediapipe")
+```
+
+The two detector models frame hands differently — on the bundled test image
+the boxes are `[408,507,583,921]` (whim) vs `[414,518,584,906]` (palm) — and
+that box drives the crop fed to HaMeR, so the choice affects the reconstructed
+geometry, not just detection recall. Worth trying both on unusual footage
+(egocentric/wrist cameras, heavy foreshortening).
 
 ### Handedness stability (video)
 

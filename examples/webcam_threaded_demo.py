@@ -88,6 +88,9 @@ def main():
                          "(stops handedness flicker mirroring the mesh)")
     ap.add_argument("--force-handedness", default=None, choices=["right", "left"],
                     help="pin handedness outright (e.g. single-hand egocentric rigs)")
+    ap.add_argument("--fasthands-detector", default=None, choices=["whim", "mediapipe"],
+                    help="fasthands detector model: whim (full-hand box, default) "
+                         "or mediapipe (original palm detector); needs fasthands>=0.4")
     ap.add_argument("--model-dir", default=None)
     ap.add_argument("--no-display", action="store_true",
                     help="headless: don't open a window (for benchmarking)")
@@ -98,7 +101,8 @@ def main():
     hands = fasthamer.load(mode="video", max_hands=args.max_hands,
                            model_dir=args.model_dir,
                            stabilize_handedness=args.stabilize,
-                           force_handedness=args.force_handedness)
+                           force_handedness=args.force_handedness,
+                           fasthands_detector=args.fasthands_detector)
 
     cap = ThreadedCamera(args.camera_id, args.width, args.height)
     if not cap.isOpened():
