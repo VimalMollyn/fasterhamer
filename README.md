@@ -127,6 +127,7 @@ fasthamer.load(
     stabilize_handedness=False,  # video: lock R/L per hand across frames
     handedness_iou=0.3,       # IoU to treat a detection as the same hand
     handedness_ttl=10,        # drop a track after N unseen frames
+    handedness_switch_frames=5,  # switch only after N consecutive disagreements
     force_handedness=None,    # "right" / "left" to pin it outright
     compute_units="CPU_AND_NE",
 )
@@ -144,9 +145,15 @@ relabeling the output afterwards is not enough.
 
 `stabilize_handedness=True` fixes it upstream of the crop: each hand gets a
 persistent IoU-matched track, and a spatially continuous hand keeps the label it
-first appeared with — the detector is trusted only when a hand first appears.
-Tracks expire after `handedness_ttl` unseen frames so a genuinely new hand can
-re-acquire.
+first appeared with. Tracks expire after `handedness_ttl` unseen frames so a
+genuinely new hand can re-acquire.
+
+The lock is *hysteretic*, not permanent: a tracked hand only switches its label
+once the detector disagrees for `handedness_switch_frames` **consecutive**
+frames (default 5). A single agreeing frame resets the streak, so alternating
+flicker never accumulates into a switch — but a sustained correction still
+wins, so a genuinely misidentified hand recovers instead of staying wrong for
+the life of the track. Set `handedness_switch_frames=0` for a permanent lock.
 
 ```python
 hands = fasthamer.load(mode="video", stabilize_handedness=True)

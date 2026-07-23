@@ -20,12 +20,58 @@ def check(name, got, want):
 
 
 def test_flicker_is_suppressed():
-    """A stationary hand keeps the label it first appeared with, even when the
-    detector flips its mind on later frames."""
-    s = HandednessStabilizer()
+    """A stationary hand keeps the label it first appeared with when the
+    detector only flickers briefly."""
+    s = HandednessStabilizer(switch_frames=5)
     box = [100, 100, 200, 200]
     got = [s([box], [flip])[0] for flip in (R, L, R, L, L)]
     check("flicker suppressed", got, [R, R, R, R, R])
+
+
+def test_sustained_disagreement_switches():
+    """N consecutive disagreeing frames flip the locked label."""
+    s = HandednessStabilizer(switch_frames=3)
+    box = [100, 100, 200, 200]
+    got = [s([box], [lab])[0] for lab in (R, L, L, L, L)]
+    #                        frame:       0  1  2  3(switch) 4
+    check("switches after N consecutive", got, [R, R, R, L, L])
+
+
+def test_disagreement_streak_must_be_consecutive():
+    """An agreeing frame resets the streak, so alternating flicker never
+    accumulates into a switch."""
+    s = HandednessStabilizer(switch_frames=3)
+    box = [100, 100, 200, 200]
+    got = [s([box], [lab])[0] for lab in (R, L, L, R, L, L, R, L, L)]
+    check("interrupted streak never switches", got, [R] * 9)
+
+
+def test_long_alternating_flicker_never_switches():
+    """The pathological case: 40 frames of R/L flicker must stay locked."""
+    s = HandednessStabilizer(switch_frames=3)
+    box = [100, 100, 200, 200]
+    got = [s([box], [R if i % 2 == 0 else L])[0] for i in range(40)]
+    check("alternating flicker never switches", set(got), {R})
+
+
+def test_switch_frames_zero_is_a_hard_lock():
+    """switch_frames=0 restores the permanent lock."""
+    s = HandednessStabilizer(switch_frames=0)
+    box = [100, 100, 200, 200]
+    got = [s([box], [lab])[0] for lab in (R, L, L, L, L, L, L)]
+    check("switch_frames=0 never switches", got, [R] * 7)
+
+
+def test_missed_frame_breaks_the_streak():
+    """A frame where the track isn't detected resets its disagreement count."""
+    s = HandednessStabilizer(switch_frames=3, ttl=10)
+    box = [100, 100, 200, 200]
+    s([box], [R])
+    s([box], [L])          # disagree 1
+    s([box], [L])          # disagree 2
+    s([], [])              # missed -> streak reset
+    got = [s([box], [L])[0], s([box], [L])[0]]   # only 2 in a row again
+    check("missed frame breaks streak", got, [R, R])
 
 
 def test_new_location_trusts_detector():
@@ -77,15 +123,29 @@ def test_low_iou_is_a_new_hand():
     check("low IoU is a new hand", got, [L])
 
 
-def test_moving_hand_keeps_label():
-    """A hand drifting across the frame stays locked as long as consecutive
-    boxes overlap enough."""
-    s = HandednessStabilizer(iou_match=0.3)
+def test_moving_hand_stays_on_its_track():
+    """A hand drifting across the frame stays matched to its track as long as
+    consecutive boxes overlap enough. switch_frames=0 isolates the spatial
+    tracking from the hysteresis."""
+    s = HandednessStabilizer(iou_match=0.3, switch_frames=0)
     got = []
     for i in range(6):        # slide 20px/frame; consecutive IoU ~0.66
         x = i * 20
         got.append(s([[x, 0, x + 100, 100]], [R if i == 0 else L])[0])
-    check("moving hand keeps label", got, [R] * 6)
+    check("moving hand stays on its track", got, [R] * 6)
+
+
+def test_moving_hand_still_switches_on_sustained_disagreement():
+    """Motion and hysteresis compose: a drifting, continuously-tracked hand
+    still adopts a sustained new label."""
+    s = HandednessStabilizer(iou_match=0.3, switch_frames=3)
+    got = []
+    for i in range(6):
+        x = i * 20
+        got.append(s([[x, 0, x + 100, 100]], [R if i == 0 else L])[0])
+    #     frame:  0  1  2  3(switch) 4  5
+    check("moving hand switches on sustained disagreement", got,
+          [R, R, R, L, L, L])
 
 
 def test_reset_clears_tracks():

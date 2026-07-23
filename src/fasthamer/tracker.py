@@ -49,6 +49,10 @@ class HandMesh:
             as an existing track (stabilizer).
         handedness_ttl: drop a track after this many consecutive unseen frames
             (stabilizer), so a genuinely new hand can re-acquire.
+        handedness_switch_frames: a tracked hand only switches its locked label
+            once the detector disagrees for this many *consecutive* frames, so
+            isolated flicker is rejected but a sustained correction still wins.
+            0 never switches (a hard lock for the life of the track).
         force_handedness: "right" or "left" — override every detection's
             handedness with a constant. For rigs where handedness is known and
             fixed (e.g. single-hand egocentric/wrist cameras). Takes precedence
@@ -62,6 +66,7 @@ class HandMesh:
                  rescale_factor: float = 2.0, swap_handedness: bool = False,
                  stabilize_handedness: bool = False,
                  handedness_iou: float = 0.3, handedness_ttl: int = 10,
+                 handedness_switch_frames: int = 5,
                  force_handedness: Optional[str] = None,
                  compute_units: str = "CPU_AND_NE", **detector_kwargs):
         if mode not in ("image", "video"):
@@ -77,8 +82,10 @@ class HandMesh:
         self.engine = CoreMLHamer(bundle, compute_units=compute_units)
         self.detector = make_detector(detector, max_hands, video=(mode == "video"),
                                       compute_units=compute_units, **detector_kwargs)
-        self._stabilizer = (HandednessStabilizer(handedness_iou, handedness_ttl)
-                            if (mode == "video" and stabilize_handedness) else None)
+        self._stabilizer = (
+            HandednessStabilizer(handedness_iou, handedness_ttl,
+                                 handedness_switch_frames)
+            if (mode == "video" and stabilize_handedness) else None)
         self._t0 = time.monotonic()
         self._last_ts = -1
         self._renderer: Optional[MeshRenderer] = None

@@ -15,15 +15,22 @@ class HandednessStabilizer:
 
     Feed it the detector's per-frame (boxes, is_right); it returns is_right
     with flicker removed: a box that stays spatially continuous keeps the label
-    it first appeared with (the detector is trusted only when a hand first
-    appears). Tracks unseen for `ttl` frames are dropped so a genuinely new
-    hand at an old location can re-acquire.
+    it first appeared with. Tracks unseen for `ttl` frames are dropped so a
+    genuinely new hand at an old location can re-acquire.
+
+    The lock is hysteretic rather than permanent: if the detector disagrees
+    with a track's label for `switch_frames` *consecutive* matched frames, the
+    track adopts the new label. Isolated flicker is rejected, but a sustained
+    correction still wins. `switch_frames=0` never switches (a hard lock).
     """
 
-    def __init__(self, iou_match: float = 0.3, ttl: int = 10):
+    def __init__(self, iou_match: float = 0.3, ttl: int = 10,
+                 switch_frames: int = 5):
         self.iou_match = float(iou_match)
         self.ttl = int(ttl)
-        self.tracks: List[Dict] = []   # each: {"box", "label", "seen"}
+        self.switch_frames = int(switch_frames)
+        # each track: {"box", "label", "seen", "disagree"}
+        self.tracks: List[Dict] = []
         self._frame = -1
 
     def reset(self) -> None:
@@ -61,13 +68,28 @@ class HandednessStabilizer:
 
         out = []
         for bi, box in enumerate(boxes):
-            if bi in match:  # spatially continuous -> keep the locked label
+            if bi in match:  # spatially continuous -> hold the locked label
                 t = self.tracks[match[bi]]
+                det = int(is_right[bi])
+                if self.switch_frames and det != t["label"]:
+                    t["disagree"] += 1
+                    if t["disagree"] >= self.switch_frames:
+                        t["label"] = det     # sustained disagreement -> switch
+                        t["disagree"] = 0
+                else:
+                    t["disagree"] = 0        # agreement breaks the streak
                 t["box"], t["seen"] = box, self._frame
                 out.append(t["label"])
             else:            # new location -> trust the detector once
                 self.tracks.append({"box": box, "label": int(is_right[bi]),
-                                    "seen": self._frame})
+                                    "seen": self._frame, "disagree": 0})
                 out.append(int(is_right[bi]))
+
+        # A track that went unseen this frame breaks its disagreement streak:
+        # the counter only measures *consecutive* observed disagreements.
+        for ti, t in enumerate(self.tracks):
+            if ti not in used:
+                t["disagree"] = 0
+
         self.tracks = [t for t in self.tracks if self._frame - t["seen"] <= self.ttl]
         return out
