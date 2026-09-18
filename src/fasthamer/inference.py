@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import sys
+import time
 from typing import Dict, List
 
 import cv2
@@ -39,26 +40,41 @@ def _load_prediction_model(mlpackage_path: str, units):
             shutil.rmtree(compiled, ignore_errors=True)  # stale/corrupt; rebuild
 
     sys.stderr.write("[fasthamer] compiling the model for your device "
-                     "(one-time, ~30 s; cached for next time)...\n")
+                     "(one-time, typically 10-30 s; cached for next time)...\n")
     sys.stderr.flush()
-    # Compile the mlpackage to a .mlmodelc once. CPU_ONLY keeps this step light
-    # and avoids a wasted Neural Engine warm-up on the throwaway temp path — the
-    # .mlmodelc is compute-unit-agnostic, so it still runs on the ANE below.
-    src_model = ct.models.MLModel(mlpackage_path,
-                                  compute_units=ct.ComputeUnit.CPU_ONLY)
+    # Compile the mlpackage straight to a .mlmodelc with `compile_model` (a pure
+    # spec -> mlmodelc step, ~0.1 s). Do NOT do this by instantiating
+    # `MLModel(mlpackage, compute_units=CPU_ONLY)` and copying its compiled
+    # path: constructing an MLModel also *loads* the program for that compute
+    # unit, and a CPU_ONLY load makes Core ML lower the entire ViT-H graph to
+    # the CPU (BNNS) backend -- many minutes on macOS 15+ -- for a model that
+    # never runs there. The .mlmodelc is compute-unit-agnostic, so the ANE
+    # compilation happens (once, OS-cached) in the CompiledMLModel load below.
+    stem = compiled[:-len(".mlmodelc")]
+    tmp = stem + "_tmp.mlmodelc"  # compile_model requires a .mlmodelc suffix
     try:
-        src = src_model.get_compiled_model_path()  # valid while src_model alive
         os.makedirs(os.path.dirname(compiled), exist_ok=True)
-        tmp = compiled + ".tmp"
         shutil.rmtree(tmp, ignore_errors=True)
-        shutil.copytree(src, tmp)
+        ct.utils.compile_model(mlpackage_path, destination_path=tmp)
         os.replace(tmp, compiled)
     except Exception:
-        # Caching failed (e.g. a read-only cache dir) — fall back to a normal
+        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.isdir(compiled):  # another process compiled it meanwhile
+            try:
+                return ct.models.CompiledMLModel(compiled, compute_units=units)
+            except Exception:
+                pass
+        # Caching failed (e.g. a read-only cache dir) -- fall back to a normal
         # in-place load with the requested compute units (slow, but works).
         return ct.models.MLModel(mlpackage_path, compute_units=units)
     # Load from the persistent path so the OS caches the ANE compilation there.
-    return ct.models.CompiledMLModel(compiled, compute_units=units)
+    # This load is where the (one-time) Neural Engine compilation happens.
+    t0 = time.time()
+    model = ct.models.CompiledMLModel(compiled, compute_units=units)
+    sys.stderr.write(f"[fasthamer] model ready ({time.time() - t0:.0f} s); "
+                     "later loads will be fast.\n")
+    sys.stderr.flush()
+    return model
 
 
 class CoreMLHamer:
