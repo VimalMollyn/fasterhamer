@@ -28,7 +28,8 @@ def main(argv=None) -> int:
     print(f"[fasthamer] setup complete.\n"
           f"  cache:      {cache_dir()}\n"
           f"  model:      {bundle}\n"
-          f"Try it:  python -c \"import fasthamer; print(fasthamer.load())\"")
+          f"Try it live:  fasthamer-webcam --mirror\n"
+          f"Or in Python: python -c \"import fasthamer; print(fasthamer.load())\"")
     return 0
 
 

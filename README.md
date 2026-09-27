@@ -32,6 +32,7 @@ Requires macOS on Apple Silicon.
 ```bash
 pip install fasthamer
 fasthamer-setup
+fasthamer-webcam --mirror     # live demo: 3D mesh overlay from your webcam
 ```
 
 `fasthamer-setup` runs once: it asks you to confirm you've accepted the MANO
@@ -84,6 +85,30 @@ while True:
     ok, frame = cap.read()
     result = hands(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 ```
+
+## Webcam demo
+
+`fasthamer-webcam` (installed with the package) opens your webcam and overlays
+the reconstructed meshes in realtime:
+
+```bash
+fasthamer-webcam --mirror              # selfie view
+fasthamer-webcam --skeleton            # 2D joints instead of the mesh
+fasthamer-webcam --camera 0            # pick a camera (auto-probed by default)
+fasthamer-webcam --stabilize           # lock Right/Left per hand across frames
+fasthamer-webcam --camera clip.mp4     # run on a video file instead of a camera
+fasthamer-webcam --record out.mp4      # also save the annotated output
+fasthamer-webcam --no-display --max-frames 120   # headless benchmark, prints FPS
+```
+
+Keys: `q` / ESC quit, `m` toggle mesh, `s` toggle skeleton. It uses the same
+low-latency loop as the threaded example below (freshest-frame capture thread
++ worker/display split), so the FPS shown is the real end-to-end rate — it is
+capped by your camera's frame rate, and only drops below that when the model
+is the bottleneck (hold your hands in view when benchmarking; with no hands
+only the ~1 ms detector runs). See `fasthamer-webcam --help` for the full
+option list (`--max-hands`, `--alpha`, `--force-handedness`,
+`--fasthands-detector`, `--compute-units`, `--width/--height`, ...).
 
 Examples:
 
