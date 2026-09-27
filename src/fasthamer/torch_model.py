@@ -319,15 +319,18 @@ class HamerTorch(nn.Module):
         self.mano = MANOLayer()
 
     @torch.no_grad()
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, return_feats: bool = False) -> Dict[str, torch.Tensor]:
         """x: (B, 3, H, W) normalized backbone input (H, W = 256, 192 for the reference model).
         Returns cam (B,3), global_orient (B,3,3), hand_pose (B,15,3,3), betas (B,10), vertices (B,778,3),
         keypoints3d (B,21,3) — all float32, hand-centered (add the camera translation downstream)."""
         feats = self.backbone(x.to(self.compute_dtype)).float()
         rotmats, betas, cam = self.mano_head(feats)
         verts, joints = self.mano(betas, rotmats)
-        return {"cam": cam, "global_orient": rotmats[:, 0], "hand_pose": rotmats[:, 1:], "betas": betas,
+        out = {"cam": cam, "global_orient": rotmats[:, 0], "hand_pose": rotmats[:, 1:], "betas": betas,
                 "vertices": verts, "keypoints3d": joints}
+        if return_feats:
+            out["feats"] = feats       # (B, 1280, 16, 12) ViT token map, for heads on the backbone
+        return out
 
     def set_compute_dtype(self, dtype: torch.dtype):
         """Run the ViT-H backbone in `dtype` (float16 on CUDA halves memory and doubles speed at

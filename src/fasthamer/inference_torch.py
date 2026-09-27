@@ -37,6 +37,10 @@ class TorchHamer:
         self.dtype = self.model.compute_dtype
         self.in_h, self.in_w = tuple(input_size) if input_size else BACKBONE_INPUT
         self.faces = self.model.faces
+        # keep_feats: also keep the backbone's token map of every crop of the last predict_batch() in
+        # last_feats (list of (1280, 16, 12) float32, crop order), for heads that reuse the backbone
+        self.keep_feats = False
+        self.last_feats = None
         self.has_mano_params = True
 
     def _prep(self, img_chw: np.ndarray) -> np.ndarray:
@@ -56,7 +60,10 @@ class TorchHamer:
             x = np.stack([self._prep(c.img) for c in crops[s:s + batch_size]])
             x = torch.from_numpy(x).to(self.device, self.dtype)
             with torch.inference_mode():
-                out = self.model(x)
+                out = self.model(x, return_feats=self.keep_feats)
+            if self.keep_feats:
+                feats = out.pop("feats").float().cpu().numpy()
+                self.last_feats = (self.last_feats or []) + list(feats) if s else list(feats)
             out = {k: v.float().cpu().numpy().astype(np.float64) for k, v in out.items()}
             for i in range(x.shape[0]):
                 preds.append({"vertices": out["vertices"][i], "keypoints3d": out["keypoints3d"][i], "cam": out["cam"][i],
