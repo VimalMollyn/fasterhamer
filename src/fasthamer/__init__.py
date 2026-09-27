@@ -1,4 +1,5 @@
-"""fasthamer — realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine.
+"""fasthamer — realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine,
+or on PyTorch (CUDA / CPU) everywhere else.
 
     import fasthamer
 
@@ -15,10 +16,10 @@
 """
 from .rendering import MESH_COLOR, MeshRenderer, draw_landmarks
 from .stabilize import HandednessStabilizer
-from .tracker import HandMesh, load
+from .tracker import HandMesh, default_backend, load
 from .types import HAND_EDGES, Hand, HandMeshResult
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer",
            "draw_landmarks", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
-           "__version__"]
+           "default_backend", "__version__"]

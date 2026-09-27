@@ -7,7 +7,8 @@ with a full 3D hand mesh behind it.
 
 - **Fast**: whole model (ViT-H backbone + MANO head + MANO mesh) runs as one
   CoreML program on the ANE — ~30 FPS end-to-end with two hands at 640px on a
-  fanless M4 MacBook Air, torch-free at runtime.
+  fanless M4 MacBook Air, torch-free at runtime. On Linux/Windows the same
+  model runs on PyTorch/CUDA (150 hands/s batched on a TITAN V).
 - **Simple**: `fasthamer.load()` → `result = hands(rgb)` → done.
 - **Complete outputs**: MANO `global_orient` / `hand_pose` / `betas`
   (rotation matrices *and* axis-angle), 778-vertex mesh, 21 3D joints,
@@ -17,7 +18,9 @@ with a full 3D hand mesh behind it.
   (CoreML/ANE, ~1 ms) and a tiny C mesh rasterizer for overlays (~10x faster
   than pyrender, no GPU/OpenGL).
 
-Requires macOS on Apple Silicon.
+The CoreML/Neural Engine path requires macOS on Apple Silicon. Everywhere else
+(Linux, Windows, Intel Macs) fasthamer runs the same model on **PyTorch**, with
+CUDA when available — see [Linux / CUDA](#linux--cuda-pytorch-backend).
 
 ## Install
 
@@ -73,6 +76,59 @@ result.focal, result.cx, result.cy   # pinhole camera: u = f*X/Z + cx
 overlay = hands.render(rgb, result)               # mesh overlay (C rasterizer)
 overlay = fasthamer.draw_landmarks(overlay, result)  # 2D skeleton
 ```
+
+## Linux / CUDA (PyTorch backend)
+
+Off macOS, `fasthamer.load()` picks the PyTorch backend (`backend="torch"`)
+and Google's MediaPipe Tasks hand detector (`detector="mediapipe"`)
+automatically. It is the same network (ViT-H + MANO head + MANO skinning),
+re-implemented in plain torch (no `hamer` / `smplx` / `timm` / `einops`
+dependencies) and loaded from the official HaMeR checkpoint.
+
+```bash
+pip install torch            # CUDA build from https://pytorch.org if you have a GPU
+pip install "fasthamer[torch]"
+# one-time: build the torch bundle from the official checkpoint
+# (hamer.ckpt from https://github.com/geopavlakos/hamer, fetch_demo_data.sh
+#  -> _DATA/hamer_ckpts/checkpoints/hamer.ckpt; MANO license applies)
+fasthamer-convert-torch --ckpt /path/to/hamer.ckpt      # -> ~/.cache/fasthamer/torch-v1 (1.3 GB, fp16)
+```
+
+```python
+hands = fasthamer.load()                     # == backend="torch", detector="mediapipe" on Linux
+hands = fasthamer.load(backend="torch", device="cuda:1", dtype="float32")   # explicit
+result = hands(rgb)                          # same API and outputs as on macOS
+```
+
+Options (all `fasthamer.load()` arguments): `backend="auto"|"coreml"|"torch"`,
+`device="auto"|"cuda"|"cuda:N"|"cpu"|"mps"`, `dtype="auto"|"float16"|"bfloat16"|"float32"`
+(auto = float16 on GPUs with tensor cores, float32 otherwise; the MANO head and
+skinning always run in float32), `input_size=(H, W)` (default `(256, 192)`, the
+reference resolution). `model_dir=` may also point at a `hamer_torch.pt` or
+straight at `hamer.ckpt`; `FASTHAMER_TORCH_MODEL_DIR` / `FASTHAMER_HAMER_CKPT`
+do the same from the environment. `fasthamer-webcam --backend torch` works too.
+
+**Bring your own detections.** If you already have hand boxes (e.g. from
+MediaPipe landmarks you recorded), skip the detector:
+
+```python
+result = hands(rgb, boxes=[xyxy], is_right=[1])          # one image
+results = hands.reconstruct_many(frames, boxes_per_frame, is_right_per_frame)  # offline batch
+```
+
+`reconstruct_many` runs every hand of every frame through the network in one
+batched pass — the fast way to process recordings on a GPU.
+
+**Accuracy vs the reference torch HaMeR** (same crops, official checkpoint):
+float32 max vertex error 0.3 mm, float16 backbone ~1 mm (fp16 noise, like the
+Neural Engine build). **Speed** on an NVIDIA TITAN V (Volta, 12 GB), 256×192
+input: float16 ≈ 7 ms/hand batched (150 hands/s), ≈ 45-60 ms for a single
+hand call (launch-bound); float32 ≈ 30 ms/hand batched. Peak GPU memory ≈ 3 GB.
+On a Pascal-class GPU (no tensor cores) float32 is the faster choice, which
+`dtype="auto"` picks for you. CPU works but is slow (seconds per hand).
+
+The MANO mesh overlay (`hands.render`) compiles its tiny C rasterizer with the
+system `cc` on Linux as well.
 
 ## Video mode
 
@@ -156,6 +212,10 @@ fasthamer.load(
     handedness_switch_frames=5,  # switch only after N consecutive disagreements
     force_handedness=None,    # "right" / "left" to pin it outright
     compute_units="CPU_AND_NE",
+    backend="auto",           # "coreml" (macOS/ANE) or "torch" (CUDA/CPU); auto by platform
+    device="auto",            # torch backend: "cuda", "cuda:1", "cpu", "mps"
+    dtype="auto",             # torch backend: float16 on tensor-core GPUs, else float32
+    input_size=None,          # torch backend: (H, W) backbone input, default (256, 192)
 )
 ```
 
@@ -164,11 +224,11 @@ fasthamer.load(
 Two independent choices, and confusingly both offer something called
 "mediapipe" — they are not the same thing:
 
-- **`detector`** picks the detection *stack*: `"fasthands"` (default) runs
-  MediaPipe Hands ported to CoreML on the Neural Engine, ~1 ms/frame;
-  `"mediapipe"` runs Google's official MediaPipe **Tasks** API on
-  TFLite/XNNPACK/GPU (needs `pip install "fasthamer[mediapipe]"`, and exposes
-  `det_conf` / `track_conf`).
+- **`detector`** picks the detection *stack*: `"fasthands"` (default on
+  macOS) runs MediaPipe Hands ported to CoreML on the Neural Engine, ~1 ms/frame;
+  `"mediapipe"` (default elsewhere) runs Google's official MediaPipe **Tasks**
+  API on TFLite/XNNPACK/GPU (needs `pip install "fasthamer[mediapipe]"`, and
+  exposes `det_conf` / `track_conf`). `"auto"` picks by platform.
 - **`fasthands_detector`** picks the detector model *inside* fasthands
   (requires `fasthands >= 0.4.0`): `"whim"` — the WHIM-fine-tuned
   full-hand-box detector, steadier than the palm detector; `"mediapipe"` —

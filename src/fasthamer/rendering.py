@@ -2,8 +2,8 @@
 
 The mesh renderer is a tiny C rasterizer (fast_render.c, ~10x faster than
 pyrender for this workload, CPU-only so it never competes with the ANE). It is
-compiled once on first use with the system C compiler into the fasthamer cache
-directory, then loaded via ctypes.
+compiled once on first use with the system C compiler (cc) into the fasthamer
+cache directory, then loaded via ctypes. Works on macOS and Linux.
 """
 import ctypes
 import hashlib
@@ -55,8 +55,9 @@ def _load_lib() -> ctypes.CDLL:
             subprocess.run(cmd, check=True, capture_output=True)
         except (FileNotFoundError, subprocess.CalledProcessError) as e:
             raise RuntimeError(
-                "fasthamer could not compile its C renderer. Install the Xcode "
-                "command line tools (`xcode-select --install`) and retry. "
+                "fasthamer could not compile its C renderer. Install a C compiler "
+                "(macOS: `xcode-select --install`; Linux: gcc or clang, e.g. "
+                "`apt install build-essential`) and retry. "
                 f"Command: {' '.join(cmd)}"
             ) from e
     lib = ctypes.CDLL(so_path)

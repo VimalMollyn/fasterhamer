@@ -17,7 +17,18 @@ Resolution order for the model bundle directory:
      use it if you already have a locally built bundle)
   3. the fasthamer cache, populated by the first-run setup above
 
-A valid bundle directory contains `hamer_mano.mlpackage` and `mano_faces.npy`.
+A valid CoreML bundle directory contains `hamer_mano.mlpackage` and `mano_faces.npy`.
+
+The PyTorch backend (Linux / Windows / CUDA / CPU) uses a separate bundle,
+`hamer_torch.pt` + `mano_faces.npy`, built locally from the official HaMeR
+checkpoint with `fasthamer-convert-torch --ckpt hamer.ckpt` (the checkpoint
+embeds the MANO buffers, so the same license acknowledgment applies). Resolution
+order for the torch bundle:
+  1. `model_dir=` argument (a bundle dir, a hamer_torch.pt, or a hamer.ckpt to
+     convert on the fly)
+  2. the FASTHAMER_TORCH_MODEL_DIR environment variable
+  3. the FASTHAMER_HAMER_CKPT environment variable (converted into the cache once)
+  4. the fasthamer cache, populated by `fasthamer-convert-torch`
 """
 import hashlib
 import os
@@ -37,6 +48,9 @@ ASSETS_SHA256: Optional[str] = \
 
 MODEL_NAME = "hamer_mano.mlpackage"
 FACES_NAME = "mano_faces.npy"
+TORCH_ASSETS_VERSION = 1
+TORCH_MODEL_NAME = "hamer_torch.pt"
+HAMER_CKPT_NAME = "hamer.ckpt"
 
 MANO_URL = "https://mano.is.tue.mpg.de"
 # Env var to accept the MANO license non-interactively (CI, scripts).
@@ -184,3 +198,51 @@ def resolve_model_dir(model_dir: Optional[str] = None, download: bool = True,
     ensure_mano_license(interactive)
     _fetch_bundle(cached)
     return cached
+
+
+# ----------------------------------------------------------------------------- torch backend
+def torch_cache_bundle_dir() -> str:
+    return os.path.join(cache_dir(), f"torch-v{TORCH_ASSETS_VERSION}")
+
+
+def _is_torch_bundle(path: str) -> bool:
+    return (os.path.isfile(os.path.join(path, TORCH_MODEL_NAME))
+            and os.path.isfile(os.path.join(path, FACES_NAME)))
+
+
+def resolve_torch_model(model_dir: Optional[str] = None, interactive: Optional[bool] = None) -> str:
+    """Return something `fasthamer.torch_model.build_model` can load: a torch bundle directory
+    (preferred), a hamer_torch.pt file, or the official hamer.ckpt. A hamer.ckpt found via the
+    FASTHAMER_HAMER_CKPT variable is converted into the cache bundle once (the fp16 bundle loads
+    in a couple of seconds; the raw checkpoint is 2.7 GB)."""
+    for cand in (model_dir, os.environ.get("FASTHAMER_TORCH_MODEL_DIR")):
+        if not cand:
+            continue
+        cand = os.path.expanduser(cand)
+        if os.path.isdir(cand) and _is_torch_bundle(cand):
+            return cand
+        if os.path.isfile(cand) and os.path.basename(cand) == TORCH_MODEL_NAME:
+            return cand
+        if os.path.isfile(cand) and cand.endswith(".ckpt"):
+            ensure_mano_license(interactive)
+            return cand
+        raise FileNotFoundError(
+            f"'{cand}' is not a fasthamer torch bundle (expected {TORCH_MODEL_NAME} and {FACES_NAME} "
+            f"inside it), a {TORCH_MODEL_NAME} file, or a hamer.ckpt")
+
+    cached = torch_cache_bundle_dir()
+    if _is_torch_bundle(cached):
+        return cached
+    ckpt = os.environ.get("FASTHAMER_HAMER_CKPT")
+    if ckpt and os.path.isfile(os.path.expanduser(ckpt)):
+        ensure_mano_license(interactive)
+        from .torch_model import convert_hamer_checkpoint
+        sys.stderr.write(f"[fasthamer] converting {ckpt} into {cached} (one-time)...\n")
+        convert_hamer_checkpoint(os.path.expanduser(ckpt), cached)
+        return cached
+    raise FileNotFoundError(
+        "no fasthamer torch model bundle found. Build one from the official HaMeR checkpoint:\n"
+        "    fasthamer-convert-torch --ckpt /path/to/hamer.ckpt\n"
+        "(hamer.ckpt: https://github.com/geopavlakos/hamer, fetch_demo_data.sh -> "
+        "_DATA/hamer_ckpts/checkpoints/hamer.ckpt), or pass model_dir= / set FASTHAMER_TORCH_MODEL_DIR "
+        "to a bundle, or set FASTHAMER_HAMER_CKPT to the checkpoint to convert it automatically.")

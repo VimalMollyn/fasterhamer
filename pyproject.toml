@@ -4,30 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fasthamer"
-version = "0.5.0"
-description = "Realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine: image in, MANO parameters + 3D/2D joints out"
+version = "0.6.0"
+description = "Realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine or PyTorch/CUDA: image in, MANO parameters + 3D/2D joints out"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [{ name = "Vimal Mollyn", email = "vmollyn@andrew.cmu.edu" }]
-keywords = ["hand-tracking", "mano", "hamer", "coreml", "neural-engine", "3d-hand-pose"]
+keywords = ["hand-tracking", "mano", "hamer", "coreml", "neural-engine", "pytorch", "cuda", "3d-hand-pose"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = [
     "numpy",
     "opencv-python",
-    "coremltools>=8.0",
-    "fasthands>=0.3.0",
+    # CoreML backend + fasthands detector: Apple Silicon only. Off macOS the
+    # PyTorch backend and the MediaPipe Tasks detector are used instead.
+    "coremltools>=8.0; sys_platform == 'darwin'",
+    "fasthands>=0.3.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
 mediapipe = ["mediapipe>=0.10"]
+# PyTorch backend (Linux / Windows / macOS-CPU). Install the CUDA build of torch
+# from https://pytorch.org first if you want the GPU.
+torch = ["torch>=2.0", "mediapipe>=0.10"]
 
 [project.urls]
 Homepage = "https://github.com/VimalMollyn/fasterhamer"
@@ -35,6 +42,7 @@ Homepage = "https://github.com/VimalMollyn/fasterhamer"
 [project.scripts]
 fasthamer-setup = "fasthamer.setup_cli:main"
 fasthamer-webcam = "fasthamer.webcam_cli:main"
+fasthamer-convert-torch = "fasthamer.convert_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

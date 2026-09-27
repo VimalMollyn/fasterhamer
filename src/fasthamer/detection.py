@@ -2,17 +2,25 @@
 boxes as a list of (4,) xyxy float32 arrays, is_right as a list of 0/1 ints.
 
 - "fasthands": MediaPipe Hands ported to CoreML on the Apple Neural Engine
-  (~1 ms/frame, numpy I/O, no torch). Default.
+  (~1 ms/frame, numpy I/O, no torch). Default on macOS.
 - "mediapipe": Google's MediaPipe Tasks HandLandmarker (install the
-  `fasthamer[mediapipe]` extra). CPU/GPU, cross-check fallback.
+  `fasthamer[mediapipe]` extra). CPU/GPU; the default off macOS, where
+  fasthands cannot run.
+- "auto": fasthands on macOS, mediapipe elsewhere.
 """
 import os
+import sys
 import urllib.request
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from .assets import cache_dir
+
+
+def default_detector() -> str:
+    """The detection stack `detector="auto"` resolves to on this platform."""
+    return "fasthands" if sys.platform == "darwin" else "mediapipe"
 
 _HAND_TASK_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
                   "hand_landmarker/float16/1/hand_landmarker.task")
@@ -107,6 +115,8 @@ class MediaPipeDetector:
 
 def make_detector(kind: str, max_hands: int, video: bool,
                   fasthands_detector: Optional[str] = None, **kwargs):
+    if kind == "auto":
+        kind = default_detector()
     if kind == "fasthands":
         return FastHandsDetector(max_hands, video,
                                  compute_units=kwargs.get("compute_units", "CPU_AND_NE"),
@@ -121,4 +131,4 @@ def make_detector(kind: str, max_hands: int, video: bool,
         return MediaPipeDetector(max_hands, video,
                                  det_conf=kwargs.get("det_conf", 0.5),
                                  track_conf=kwargs.get("track_conf", 0.5))
-    raise ValueError(f"unknown detector '{kind}' (use 'fasthands' or 'mediapipe')")
+    raise ValueError(f"unknown detector '{kind}' (use 'auto', 'fasthands' or 'mediapipe')")

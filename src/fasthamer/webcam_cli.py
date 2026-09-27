@@ -110,7 +110,8 @@ def _find_camera(width, height):
     if best is None:
         raise SystemExit(
             "could not open a webcam — check camera permissions "
-            "(System Settings > Privacy & Security > Camera) or pass --camera N")
+            "(macOS: System Settings > Privacy & Security > Camera; Linux: "
+            "/dev/video* permissions) or pass --camera N")
     rank, i = best
     print(f"[fasthamer] no camera streamed video; using camera {i} anyway "
           f"({'black frames' if rank == 0 else 'no frames yet'}) — "
@@ -256,7 +257,7 @@ def build_parser():
     ap = argparse.ArgumentParser(
         prog="fasthamer-webcam",
         description="Live webcam demo: realtime 3D hand mesh overlay "
-                    "(HaMeR on the Apple Neural Engine). "
+                    "(HaMeR on the Apple Neural Engine, or PyTorch/CUDA elsewhere). "
                     "Keys: q/ESC quit, m toggle mesh, s toggle skeleton.")
     ap.add_argument("--camera", default=None, metavar="N|PATH",
                     help="cv2 camera index, or a video/image file to run on "
@@ -278,16 +279,25 @@ def build_parser():
                          "(stops handedness flicker mirroring the mesh)")
     ap.add_argument("--force-handedness", default=None, choices=["right", "left"],
                     help="pin handedness outright (e.g. single-hand egocentric rigs)")
-    ap.add_argument("--detector", default="fasthands", choices=["fasthands", "mediapipe"],
-                    help="detection stack: fasthands (CoreML/ANE, default) or "
-                         "mediapipe (Google MediaPipe Tasks; needs fasthamer[mediapipe])")
+    ap.add_argument("--backend", default="auto", choices=["auto", "coreml", "torch"],
+                    help="inference backend: auto (CoreML on macOS, PyTorch elsewhere), "
+                         "coreml (Apple Neural Engine) or torch (CUDA/CPU)")
+    ap.add_argument("--device", default="auto",
+                    help="torch backend device: auto, cuda, cuda:1, cpu, mps (default auto)")
+    ap.add_argument("--dtype", default="auto", choices=["auto", "float16", "bfloat16", "float32"],
+                    help="torch backend precision (default auto: float16 on tensor-core GPUs)")
+    ap.add_argument("--detector", default="auto", choices=["auto", "fasthands", "mediapipe"],
+                    help="detection stack: auto (fasthands on macOS, mediapipe elsewhere), "
+                         "fasthands (CoreML/ANE) or mediapipe (Google MediaPipe Tasks; "
+                         "needs fasthamer[mediapipe])")
     ap.add_argument("--fasthands-detector", default=None, choices=["whim", "mediapipe"],
                     help="fasthands detector model: whim (full-hand box, default) "
                          "or mediapipe (palm detector); needs fasthands>=0.4")
     ap.add_argument("--compute-units", default="CPU_AND_NE",
                     choices=["CPU_AND_NE", "ALL", "CPU_AND_GPU", "CPU_ONLY"])
     ap.add_argument("--model-dir", default=None,
-                    help="local model bundle (default: the fasthamer cache)")
+                    help="local model bundle (default: the fasthamer cache); for the torch "
+                         "backend this may also be a hamer.ckpt")
     ap.add_argument("--record", default=None, metavar="PATH",
                     help="also write the annotated frames to a video file (.mp4/.avi)")
     ap.add_argument("--no-display", action="store_true",
@@ -302,16 +312,18 @@ def main(argv=None) -> int:
     source = _parse_source(args.camera)
 
     opener = SourceOpener(source, args.width, args.height)   # overlaps the load
-    print("[fasthamer] loading model (the first run compiles it for your "
-          "device, which can take ~30 s)...", flush=True)
+    print("[fasthamer] loading model (on macOS the first run compiles it for "
+          "your device, which can take ~30 s)...", flush=True)
     t = time.time()
     hands = load(mode="video", max_hands=args.max_hands,
+                 backend=args.backend,
                  detector=args.detector,
                  fasthands_detector=args.fasthands_detector,
                  model_dir=args.model_dir,
                  stabilize_handedness=args.stabilize,
                  force_handedness=args.force_handedness,
-                 compute_units=args.compute_units)
+                 compute_units=args.compute_units,
+                 device=args.device, dtype=args.dtype)
     print(f"[fasthamer] model ready in {time.time() - t:.1f} s", flush=True)
 
     cap, source = opener.get()
