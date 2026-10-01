@@ -1,10 +1,11 @@
 """The main fasthamer API: HandMesh."""
+import os
 import time
 from typing import Optional
 
 import numpy as np
 
-from .assets import resolve_model_dir
+from .assets import bundle_model_path, resolve_mano, resolve_model_dir
 from .detection import make_detector
 from .inference import CoreMLHamer
 from .preprocess import cam_crop_to_full, preprocess_hands, scaled_focal_length
@@ -46,6 +47,10 @@ class HandMesh:
             detector running on the ANE inside fasthands.
         model_dir: directory holding the model bundle; defaults to the
             fasthamer cache (auto-downloaded on first use).
+        mano_path: your MANO model — `MANO_RIGHT.pkl`, the `mano_v1_2`
+            folder, or `mano_v1_2.zip`. Defaults to the copy cached by
+            `fasthamer-setup` (or FASTHAMER_MANO_PATH); if none exists you
+            are prompted for a path or for your MANO account to download it.
         rescale_factor: hand-box padding before cropping (HaMeR default 2.0).
         swap_handedness: flip left/right labels (use for mirrored inputs
             where handedness looks inverted).
@@ -73,7 +78,7 @@ class HandMesh:
     def __init__(self, mode: str = "image", max_hands: int = 2,
                  detector: str = "fasthands",
                  fasthands_detector: Optional[str] = None,
-                 model_dir: Optional[str] = None,
+                 model_dir: Optional[str] = None, mano_path: Optional[str] = None,
                  rescale_factor: float = 2.0, swap_handedness: bool = False,
                  stabilize_handedness: bool = False,
                  handedness_iou: float = 0.3, handedness_ttl: int = 10,
@@ -89,8 +94,18 @@ class HandMesh:
         self.rescale_factor = float(rescale_factor)
         self.swap_handedness = bool(swap_handedness)
         self.force_handedness = force_handedness
-        bundle = resolve_model_dir(model_dir)
-        self.engine = CoreMLHamer(bundle, compute_units=compute_units)
+        # Resolve MANO before the (large) bundle download so a first-run user
+        # is asked for their MANO file up front; an explicit legacy bundle
+        # (mesh baked in) needs no MANO file at all.
+        bundle = mano_npz = None
+        if model_dir or os.environ.get("FASTHAMER_MODEL_DIR"):
+            bundle = resolve_model_dir(model_dir)
+        legacy = bundle is not None and bundle_model_path(bundle)[1]
+        if not legacy:
+            mano_npz = resolve_mano(mano_path)
+        if bundle is None:
+            bundle = resolve_model_dir(model_dir)
+        self.engine = CoreMLHamer(bundle, compute_units=compute_units, mano_npz=mano_npz)
         self.detector = make_detector(detector, max_hands, video=(mode == "video"),
                                       fasthands_detector=fasthands_detector,
                                       compute_units=compute_units, **detector_kwargs)

@@ -13,12 +13,13 @@
         hand.betas             # (10,) MANO shape
     overlay = hands.render(rgb_frame, result)
 """
+from .mano import ManoRight
 from .rendering import MESH_COLOR, MeshRenderer, draw_landmarks
 from .stabilize import HandednessStabilizer
 from .tracker import HandMesh, load
 from .types import HAND_EDGES, Hand, HandMeshResult
 
-__version__ = "0.5.0"
-__all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer",
+__version__ = "0.6.0"
+__all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer", "ManoRight",
            "draw_landmarks", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
            "__version__"]

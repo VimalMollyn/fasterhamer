@@ -1,16 +1,21 @@
-"""CoreML inference for the full HaMeR model (ViT-H backbone + MANO head + MANO
-mesh in one mlpackage) on the Apple Neural Engine. Pure numpy I/O — no torch."""
+"""CoreML inference for HaMeR (ViT-H backbone + MANO head in one mlpackage) on
+the Apple Neural Engine, followed by the MANO mesh in numpy from the user's own
+MANO model. Pure numpy I/O — no torch.
+
+Legacy bundles that have the MANO mesh baked into the mlpackage (outputs
+`vertices` / `keypoints3d`) are still supported and need no MANO file."""
 import hashlib
 import os
 import shutil
 import sys
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
 
-from .assets import FACES_NAME, MODEL_NAME, cache_dir
+from .assets import FACES_NAME, bundle_model_path, cache_dir
+from .mano import ManoRight, load_mano_npz
 from .preprocess import HandCrop, IMAGE_SIZE
 
 
@@ -78,20 +83,40 @@ def _load_prediction_model(mlpackage_path: str, units):
 
 
 class CoreMLHamer:
-    def __init__(self, model_dir: str, compute_units: str = "CPU_AND_NE"):
+    """image crop -> MANO params (CoreML) -> vertices + 21 joints (numpy MANO).
+
+    `mano_npz` is the user's MANO model as cached by `fasthamer.assets`
+    (required unless the bundle is a legacy one with the mesh baked in)."""
+
+    def __init__(self, model_dir: str, compute_units: str = "CPU_AND_NE",
+                 mano_npz: Optional[str] = None):
         import coremltools as ct
         units = getattr(ct.ComputeUnit, compute_units)
-        mlpackage = os.path.join(model_dir, MODEL_NAME)
+        mlpackage, legacy = bundle_model_path(model_dir)
         # Read the spec cheaply (no compile) for I/O metadata, then load the
         # prediction model via the compile-once cache.
         spec = ct.models.MLModel(mlpackage, skip_model_load=True).get_spec().description
         self.model = _load_prediction_model(mlpackage, units)
-        self.faces = np.load(os.path.join(model_dir, FACES_NAME))
         shape = spec.input[0].type.multiArrayType.shape
         self.in_h, self.in_w = int(shape[-2]), int(shape[-1])
         self.full_input = (self.in_h == IMAGE_SIZE and self.in_w == IMAGE_SIZE)
         self.output_names = {o.name for o in spec.output}
         self.has_mano_params = {"global_orient", "hand_pose", "betas"} <= self.output_names
+        self.has_mesh = {"vertices", "keypoints3d"} <= self.output_names
+
+        self.mano: Optional[ManoRight] = None
+        if self.has_mesh:  # legacy fused bundle: mesh comes out of CoreML
+            self.faces = np.load(os.path.join(model_dir, FACES_NAME)) if legacy \
+                else ManoRight(load_mano_npz(mano_npz)).faces
+        else:
+            if not self.has_mano_params:
+                raise RuntimeError(f"{mlpackage} outputs neither a mesh nor MANO "
+                                   f"parameters (outputs: {sorted(self.output_names)})")
+            if mano_npz is None:
+                raise ValueError("this model bundle has no MANO mesh layer; a MANO "
+                                 "model is required (fasthamer.assets.resolve_mano)")
+            self.mano = ManoRight(load_mano_npz(mano_npz))
+            self.faces = self.mano.faces
 
     def _prep(self, img_chw: np.ndarray) -> np.ndarray:
         """(3, 256, 256) normalized crop -> model input (1, 3, in_h, in_w)."""
@@ -106,13 +131,15 @@ class CoreMLHamer:
 
     def predict(self, crop: HandCrop) -> Dict[str, np.ndarray]:
         out = self.model.predict({"image": self._prep(crop.img)})
-        pred = {
-            "vertices": np.asarray(out["vertices"][0], dtype=np.float64),
-            "keypoints3d": np.asarray(out["keypoints3d"][0], dtype=np.float64),
-            "cam": np.asarray(out["cam"][0], dtype=np.float64),
-        }
+        pred = {"cam": np.asarray(out["cam"][0], dtype=np.float64)}
         if self.has_mano_params:
             pred["global_orient"] = np.asarray(out["global_orient"][0], dtype=np.float64)
             pred["hand_pose"] = np.asarray(out["hand_pose"][0], dtype=np.float64)
             pred["betas"] = np.asarray(out["betas"][0], dtype=np.float64)
+        if self.mano is not None:
+            pred["vertices"], pred["keypoints3d"] = self.mano(
+                pred["global_orient"], pred["hand_pose"], pred["betas"])
+        else:
+            pred["vertices"] = np.asarray(out["vertices"][0], dtype=np.float64)
+            pred["keypoints3d"] = np.asarray(out["keypoints3d"][0], dtype=np.float64)
         return pred

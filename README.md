@@ -5,9 +5,10 @@ the Apple Neural Engine. Give it an image, get MANO parameters, 3D joints,
 camera parameters, and 2D joints per hand — a MediaPipe-Hands-style API, but
 with a full 3D hand mesh behind it.
 
-- **Fast**: whole model (ViT-H backbone + MANO head + MANO mesh) runs as one
-  CoreML program on the ANE — ~30 FPS end-to-end with two hands at 640px on a
-  fanless M4 MacBook Air, torch-free at runtime.
+- **Fast**: the whole network (ViT-H backbone + MANO head) runs as one CoreML
+  program on the ANE, the MANO mesh is a sub-millisecond numpy step — ~30 FPS
+  end-to-end with two hands at 640px on a fanless M4 MacBook Air, torch-free
+  at runtime.
 - **Simple**: `fasthamer.load()` → `result = hands(rgb)` → done.
 - **Complete outputs**: MANO `global_orient` / `hand_pose` / `betas`
   (rotation matrices *and* axis-angle), 778-vertex mesh, 21 3D joints,
@@ -21,32 +22,34 @@ Requires macOS on Apple Silicon.
 
 ## Install
 
-> **MANO license required.** fasthamer is built on the
-> [MANO](https://mano.is.tue.mpg.de) hand model, which is free for
-> non-commercial research but license-gated. Before installing, create an
-> account at https://mano.is.tue.mpg.de and **sign/accept the MANO license**
-> there. The CoreML model bundle has MANO-derived data baked into its weights,
-> so by using fasthamer you agree to use it only under the terms of that
-> license.
+> **You need your own MANO model.** fasthamer computes the hand mesh with
+> [MANO](https://mano.is.tue.mpg.de), which is free for non-commercial
+> research but license-gated, so fasthamer does not ship it. Create an account
+> at https://mano.is.tue.mpg.de and **accept the MANO license** there; the
+> setup below then either uses a `MANO_RIGHT.pkl` / `mano_v1_2.zip` you already
+> have, or downloads `mano_v1_2.zip` with your MANO account email + password
+> (sent only to the MPI server, never stored).
 
 ```bash
 pip install fasthamer
-fasthamer-setup
-fasthamer-webcam --mirror     # live demo: 3D mesh overlay from your webcam
+fasthamer-setup                           # or: fasthamer-setup --mano ~/Downloads/mano_v1_2.zip
+fasthamer-webcam --mirror                 # live demo: 3D mesh overlay from your webcam
 ```
 
-`fasthamer-setup` runs once: it asks you to confirm you've accepted the MANO
-license, then downloads the prebuilt CoreML model bundle (~470 MB) into
-`~/.cache/fasthamer`. If you skip this step, the same prompt runs on your
-first `fasthamer.load()`.
+`fasthamer-setup` runs once. It (1) imports your MANO model into
+`~/.cache/fasthamer/mano/` — prompting for a path or for your MANO account if
+it can't find one — and (2) downloads the prebuilt CoreML model bundle
+(~470 MB, no MANO data inside) into `~/.cache/fasthamer`. If you skip this
+step, the same prompts run on your first `fasthamer.load()`.
 
 The **first** `fasthamer.load()` also compiles the model for your device
 (one-time, typically 10-30 s) and caches the compiled `.mlmodelc`; every load
 after that takes a couple of seconds.
 
-Non-interactive environments (CI, scripts): set
-`FASTHAMER_ACCEPT_MANO_LICENSE=1` to acknowledge the license, e.g.
-`FASTHAMER_ACCEPT_MANO_LICENSE=1 fasthamer-setup`.
+Non-interactive environments (CI, scripts): point `FASTHAMER_MANO_PATH` at
+your `MANO_RIGHT.pkl` / `mano_v1_2` folder / `mano_v1_2.zip`, or set
+`MANO_USERNAME` and `MANO_PASSWORD` to let `fasthamer-setup` download it.
+`python -m fasthamer.mano_download` downloads the zip on its own.
 
 ## Quickstart
 
@@ -147,7 +150,9 @@ fasthamer.load(
     max_hands=2,
     detector="fasthands",     # detection stack: "fasthands" or "mediapipe"
     fasthands_detector=None,  # model inside fasthands: "whim" or "mediapipe"
-    model_dir=None,           # local bundle dir (skips download/license check)
+    model_dir=None,           # local model bundle dir (skips the download)
+    mano_path=None,           # your MANO_RIGHT.pkl / mano_v1_2 folder / zip
+                              #   (default: the copy cached by fasthamer-setup)
     rescale_factor=2.0,       # hand-box padding before cropping
     swap_handedness=False,    # if handedness looks inverted (mirrored inputs)
     stabilize_handedness=False,  # video: lock R/L per hand across frames
@@ -218,25 +223,32 @@ For rigs where handedness is known and fixed (single-hand egocentric mounts),
 constraint that takes precedence over the tracker. Both are orthogonal to
 `swap_handedness`, which is a global flip applied by the detector.
 
-`FASTHAMER_MODEL_DIR` (env) points at a local model bundle;
-`FASTHAMER_ASSETS_URL` overrides where the bundle is downloaded from.
+Environment variables: `FASTHAMER_MANO_PATH` points at your MANO model
+(`MANO_RIGHT.pkl`, `mano_v1_2/`, or `mano_v1_2.zip`); `MANO_USERNAME` /
+`MANO_PASSWORD` let setup download it non-interactively; `FASTHAMER_MODEL_DIR`
+points at a local model bundle; `FASTHAMER_ASSETS_URL` overrides where the
+bundle is downloaded from.
 
 ## How it works
 
 MediaPipe-style palm detection (fasthands, ANE) finds hand boxes; each box is
 cropped HaMeR-style and run through a single CoreML mlprogram containing the
-ViT-H backbone (192×144 input, interpolated position embeddings), the MANO
-transformer head, and the MANO mesh — 6-bit palettized weights with the MANO
-buffers kept at fp16. Outputs match the reference HaMeR torch pipeline to
-<1 mm (fp16 noise floor). The overlay renderer is a small C rasterizer with
-supersampled anti-aliasing, compiled once on first use.
+ViT-H backbone (192×144 input, interpolated position embeddings) and the MANO
+transformer head — 6-bit palettized weights — which outputs the MANO
+parameters and camera. The MANO mesh itself (778 vertices, 21 joints) is then
+computed in numpy from *your* `MANO_RIGHT.pkl` (`fasthamer.mano`, ~0.5 ms per
+hand, no chumpy/scipy/torch); it matches HaMeR's smplx MANO layer to 1e-7 m.
+End-to-end outputs match the reference HaMeR torch pipeline to a few mm
+(fp16 + palettization noise). The overlay renderer is a small C rasterizer
+with supersampled anti-aliasing, compiled once on first use.
 
 ## License
 
-Code: MIT. The model weights are derived from the HaMeR checkpoint and the
-MANO model; MANO is licensed by the Max Planck Institute for non-commercial
-scientific research — you must register at https://mano.is.tue.mpg.de (which
-the first-run setup asks you to confirm) and comply with its
-[license](https://mano.is.tue.mpg.de/license.html). Cite
-[HaMeR](https://arxiv.org/abs/2312.05251) and
+Code: MIT. The CoreML model bundle is converted from the MIT-licensed
+[HaMeR](https://github.com/geopavlakos/hamer) checkpoint and contains no MANO
+data. The MANO model is licensed by the Max Planck Institute for
+non-commercial scientific research and is obtained by *you* from your own
+account at https://mano.is.tue.mpg.de under its
+[license](https://mano.is.tue.mpg.de/license.html); fasthamer only reads the
+copy you provide. Cite [HaMeR](https://arxiv.org/abs/2312.05251) and
 [MANO](https://mano.is.tue.mpg.de) in academic work.

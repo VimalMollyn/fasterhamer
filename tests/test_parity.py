@@ -1,10 +1,12 @@
 """Dev parity tests — run from the hamer-realtime repo root with its venv:
 
-    FASTHAMER_MODEL_DIR=_DATA/fasthamer_bundle python fasthamer/tests/test_parity.py
+    FASTHAMER_MODEL_DIR=_DATA/fasthamer_bundle_v2 python fasthamer/tests/test_parity.py
 
 Needs the full hamer repo + torch (not shipped with fasthamer). Checks that:
   A. fasthamer's torch-free preprocessing matches hamer's ViTDetDataset crops
-     and the end-to-end outputs match realtime_demo's FullHamerCoreML.
+     and the end-to-end outputs match realtime_demo's FullHamerCoreML running
+     the legacy fused bundle (FASTHAMER_REF_BUNDLE, default
+     _DATA/fasthamer_bundle: mesh baked into CoreML).
   B. the returned MANO parameters reproduce the returned vertices when pushed
      through the reference smplx MANO layer.
 """
@@ -28,10 +30,12 @@ IMAGES = ["example_data/test1.jpg", "example_data/test3.jpg", "example_data/test
 
 def main():
     bundle = resolve_model_dir()
+    ref_bundle = os.environ.get("FASTHAMER_REF_BUNDLE", "_DATA/fasthamer_bundle")
     model_cfg = rt.load_cfg(rt.DEFAULT_CHECKPOINT)
-    ref_engine = rt.FullHamerCoreML(os.path.join(bundle, "hamer_mano.mlpackage"),
-                                    os.path.join(bundle, "mano_faces.npy"), model_cfg)
+    ref_engine = rt.FullHamerCoreML(os.path.join(ref_bundle, "hamer_mano.mlpackage"),
+                                    os.path.join(ref_bundle, "mano_faces.npy"), model_cfg)
     hm = fasthamer.load(mode="image", model_dir=bundle)
+    print(f"bundle under test: {bundle}\nreference bundle:  {ref_bundle}")
 
     mano = None  # lazy: torch MANO layer for test B
     ok = True
@@ -87,11 +91,11 @@ def main():
                 f"verts={vert_err:.2e} cam_t={camt_err:.2e} "
                 f"focal={focal_err:.2e} mano_recon={mano_err*1000:.3f}mm")
         # Crops: bitwise except images that trigger the anti-alias blur (cv2 vs
-        # skimage Gaussian, <1e-3 px-value delta). Verts/cam_t: identical when
-        # crops are bitwise; blur-path crop deltas pass through the fp16 model
-        # at its own noise floor (~1e-3 m). MANO recon: fp16/palettization
-        # noise of the on-device mesh vs fp32 smplx.
-        passed = crop_err < 1e-3 and vert_err < 2e-3 and camt_err < 5e-2 \
+        # skimage Gaussian, <1e-3 px-value delta). Verts: the bundle under test
+        # and the reference are separately palettized exports (and the mesh is
+        # fp64 numpy vs fp16 CoreML), so allow a few mm. MANO recon: ~1e-7 with
+        # the numpy mesh, ~1e-3 with a legacy fused bundle.
+        passed = crop_err < 1e-3 and vert_err < 5e-3 and camt_err < 5e-2 \
             and focal_err < 1e-6 and mano_err < 2e-3
         ok &= passed
         print(("PASS " if passed else "FAIL ") + line)
