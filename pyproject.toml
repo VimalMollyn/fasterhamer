@@ -40,4 +40,4 @@ fasthamer-webcam = "fasthamer.webcam_cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fasthamer = ["fast_render.c"]
+fasthamer = ["fast_render.c", "soma_stage.c"]
