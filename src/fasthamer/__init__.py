@@ -14,12 +14,12 @@
     overlay = hands.render(rgb_frame, result)
 """
 from .mano import ManoRight
-from .rendering import MESH_COLOR, MeshRenderer, draw_landmarks
+from .rendering import MESH_COLOR, MeshRenderer, draw_landmarks, draw_wireframe
 from .stabilize import HandednessStabilizer
 from .tracker import HandMesh, load
 from .types import HAND_EDGES, Hand, HandMeshResult
 
 __version__ = "0.6.0"
 __all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer", "ManoRight",
-           "draw_landmarks", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
+           "draw_landmarks", "draw_wireframe", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
            "__version__"]

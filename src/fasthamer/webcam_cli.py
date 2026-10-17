@@ -25,7 +25,7 @@ import time
 import cv2
 
 from .assets import cache_dir
-from .rendering import draw_landmarks
+from .rendering import MESH_COLOR, MeshRenderer, draw_landmarks, draw_wireframe
 from .tracker import load
 
 # Camera auto-detection: on Macs with Continuity Camera or extra USB cameras,
@@ -226,11 +226,11 @@ class ThreadedCamera:
         self.cap.release()
 
 
-def _put_label(frame, text, y=28):
-    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+def _put_label(frame, text, y=28, scale=0.7, color=(0, 255, 0)):
+    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale,
                 (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                (0, 255, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                color, 2, cv2.LINE_AA)
 
 
 def _parse_source(s):
@@ -290,6 +290,18 @@ def build_parser():
                     help="local model bundle (default: the fasthamer cache)")
     ap.add_argument("--record", default=None, metavar="PATH",
                     help="also write the annotated frames to a video file (.mp4/.avi)")
+    ap.add_argument("--soma", default=os.environ.get("FASTHAMER_SOMA_CKPT"), metavar="CKPT",
+                    help="overlay a SOMA-X hand regressed from the MANO params with the "
+                         "mano2soma-x checkpoint CKPT. Blue = MANO, orange = SOMA-X; key 'o' "
+                         "cycles the view: blend (both surfaces semi-transparent: a good fit "
+                         "shows no colour fringes), flicker (alternates MANO/SOMA 3x per "
+                         "second), mano, soma, wire (SOMA surface + MANO wireframe). Needs "
+                         "torch + py-soma-x + mano_to_somax. Default: $FASTHAMER_SOMA_CKPT")
+    ap.add_argument("--soma-lod", default="mid", choices=["mid", "low"],
+                    help="SOMA hand mesh resolution (default mid, 2859 verts)")
+    ap.add_argument("--mano-pkl", default=None, metavar="PATH",
+                    help="MANO_RIGHT.pkl for the SOMA fit-error readout (default: the copy in "
+                         "the fasthamer cache)")
     ap.add_argument("--no-display", action="store_true",
                     help="headless: don't open a window (benchmarking / --record)")
     ap.add_argument("--max-frames", type=int, default=0, metavar="N",
@@ -314,6 +326,21 @@ def main(argv=None) -> int:
                  compute_units=args.compute_units)
     print(f"[fasthamer] model ready in {time.time() - t:.1f} s", flush=True)
 
+    soma = None
+    if args.soma:
+        from .soma import SOMA_COLOR, SomaOverlay
+        t = time.time()
+        soma = SomaOverlay(args.soma, lod=args.soma_lod, mano_pkl=args.mano_pkl)
+        print(f"[fasthamer] SOMA-X overlay ready in {time.time() - t:.1f} s "
+              f"({'with' if soma.can_measure else 'without'} fit-error readout)", flush=True)
+        soma_renderers = {}
+
+        def render_soma(rgb, soma_result, alpha):
+            if alpha not in soma_renderers:
+                soma_renderers[alpha] = MeshRenderer(soma.faces, color=SOMA_COLOR,
+                                                     alpha=alpha, close_wrist=False)
+            return soma_renderers[alpha].render(rgb, soma_result)
+
     cap, source = opener.get()
     live = not isinstance(source, str)
     if not live:
@@ -325,7 +352,10 @@ def main(argv=None) -> int:
     cam = ThreadedCamera(cap, live=live)
 
     # Runtime toggles (read by the worker each frame, flipped by the key loop).
-    opts = {"mesh": not args.skeleton, "skeleton": args.skeleton}
+    opts = {"mesh": not args.skeleton, "skeleton": args.skeleton,
+            "overlay": "blend"}  # with --soma: blend | flicker | mano | soma | wire
+    overlay_modes = ["blend", "flicker", "mano", "soma", "wire"]
+    mano_rgb = tuple(int(round(c * 255)) for c in MESH_COLOR)
     # The worker owns inference + overlay and publishes finished frames here;
     # the main thread only reads `state["frame"]` to display it.
     state = {"frame": None, "stop": False, "count": 0, "writer": None}
@@ -344,13 +374,39 @@ def main(argv=None) -> int:
                 frame = cv2.flip(frame, 1)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = hands(rgb)
+            soma_line = None
             if opts["mesh"]:
-                out = cv2.cvtColor(hands.render(rgb, result, alpha=args.alpha),
-                                   cv2.COLOR_RGB2BGR)
+                if soma is not None:
+                    soma_result, errs = soma.convert(result)
+                    mode = opts["overlay"]
+                    img = rgb
+                    if mode == "flicker":    # alternate the two surfaces ~3x per second
+                        mode = "mano" if int(time.time() * 3) % 2 == 0 else "soma"
+                    if mode == "wire":       # SOMA surface + MANO wireframe on top
+                        img = render_soma(img, soma_result, args.alpha)
+                        img = draw_wireframe(img, result, hands.faces, color=mano_rgb)
+                    elif mode == "blend":    # both surfaces, semi-transparent
+                        img = hands.render(img, result, alpha=0.5)
+                        img = render_soma(img, soma_result, 0.5)
+                    elif mode == "mano":
+                        img = hands.render(img, result, alpha=args.alpha)
+                    else:
+                        img = render_soma(img, soma_result, args.alpha)
+                    fit = [e for e in errs if e is not None]
+                    soma_line = ("SOMA-X fit " + " / ".join(f"{e:.1f}" for e in fit) + " mm"
+                                 if fit else "SOMA-X") + \
+                                f"  |  {opts['overlay']}{'' if mode == opts['overlay'] else ':' + mode}" \
+                                f" (o)  blue=MANO orange=SOMA"
+                    out = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                else:
+                    out = cv2.cvtColor(hands.render(rgb, result, alpha=args.alpha),
+                                       cv2.COLOR_RGB2BGR)
             else:
                 out = frame          # already our own copy (cam.read())
             if opts["skeleton"]:
                 out = draw_landmarks(out, result, bgr=True)
+            if soma_line:
+                _put_label(out, soma_line, y=52, scale=0.55)
             now = time.time()
             if t_prev is not None:
                 inst = 1.0 / max(now - t_prev, 1e-6)
@@ -371,7 +427,8 @@ def main(argv=None) -> int:
     wt = threading.Thread(target=worker, daemon=True)
     wt.start()
 
-    win = "fasthamer webcam  (q quit | m mesh | s skeleton)"
+    win = "fasthamer webcam  (q quit | m mesh | s skeleton" + \
+          (" | o MANO/SOMA overlay)" if soma is not None else ")")
     t_start = time.time()
     code = 0
     try:
@@ -398,6 +455,9 @@ def main(argv=None) -> int:
                 opts["mesh"] = not opts["mesh"]
             elif key == ord("s"):
                 opts["skeleton"] = not opts["skeleton"]
+            elif key == ord("o") and soma is not None:
+                opts["overlay"] = overlay_modes[
+                    (overlay_modes.index(opts["overlay"]) + 1) % len(overlay_modes)]
     except KeyboardInterrupt:
         pass
     finally:

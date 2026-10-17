@@ -79,9 +79,13 @@ class MeshRenderer:
     """Renders MANO meshes over an image with a pinhole camera (u = f*x/z + cx)."""
 
     def __init__(self, faces: np.ndarray, color=MESH_COLOR, ambient: float = 0.5,
-                 alpha: float = 1.0, antialias: int = 2):
+                 alpha: float = 1.0, antialias: int = 2, close_wrist: bool = True):
+        """`close_wrist` appends the triangles that cap MANO's open wrist; pass
+        False for meshes with a different topology (e.g. a SOMA hand)."""
         faces = np.asarray(faces, dtype=np.int32)
-        self.faces = np.ascontiguousarray(np.concatenate([faces, _FACES_NEW]), dtype=np.int32)
+        if close_wrist:
+            faces = np.concatenate([faces, _FACES_NEW])
+        self.faces = np.ascontiguousarray(faces, dtype=np.int32)
         self.faces_left = np.ascontiguousarray(self.faces[:, [0, 2, 1]], dtype=np.int32)
         self.color = tuple(float(c) for c in color)
         self.ambient = float(ambient)
@@ -111,6 +115,37 @@ class MeshRenderer:
             self.color[0], self.color[1], self.color[2],
             self.ambient, self.alpha, self.antialias)
         return img
+
+
+_EDGE_CACHE = {}
+
+
+def _mesh_edges(faces: np.ndarray) -> np.ndarray:
+    """Unique undirected edges (E, 2) of a triangle mesh, cached per face array."""
+    key = (faces.shape, int(faces[:5].sum()), int(faces[-5:].sum()))
+    if key not in _EDGE_CACHE:
+        f = np.asarray(faces, dtype=np.int64)
+        e = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+        e.sort(axis=1)
+        _EDGE_CACHE[key] = np.unique(e, axis=0)
+    return _EDGE_CACHE[key]
+
+
+def draw_wireframe(image: np.ndarray, result: HandMeshResult, faces: np.ndarray,
+                   color=(255, 255, 255), thickness: int = 1,
+                   bgr: bool = False) -> np.ndarray:
+    """Draw every hand mesh in `result` as a projected wireframe on a copy of
+    `image` (uint8). `faces` indexes `hand.vertices`; `color` is RGB unless
+    bgr=True. No hidden-line removal (back edges show through)."""
+    img = np.ascontiguousarray(image, dtype=np.uint8).copy()
+    col = tuple(int(c) for c in (color[::-1] if bgr else color))
+    edges = _mesh_edges(faces)
+    for hand in result.hands:
+        pts = result.project(hand.vertices_camera)
+        segs = np.round(pts[edges]).astype(np.int32)        # (E, 2, 2)
+        cv2.polylines(img, list(segs.reshape(-1, 2, 1, 2)), False, col,
+                      thickness, cv2.LINE_AA)
+    return img
 
 
 def draw_landmarks(image: np.ndarray, result: HandMeshResult,
