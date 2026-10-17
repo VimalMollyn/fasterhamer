@@ -34,11 +34,11 @@ from .mano import PKL_NAME
 from .types import HandMeshResult
 
 SOMA_COLOR = (0.96, 0.56, 0.16)  # orange, against fasthamer's steel-blue MANO
-# CoreML regressor files looked up next to the npz for regressor="auto", in order of
-# preference: the fp32 one is exact (vertices within 0.05 mm of the reference, ~0.4 ms
-# on the CPU); the fp16 Neural Engine one is a little faster (~0.3 ms) but fp16 in
-# the rotation head costs up to ~1.5 mm at the fingertips.
-AUTO_REGRESSOR_NAMES = ("mano2somax_regressor_fp32.mlpackage", "mano2somax_regressor_ane.mlpackage")
+# regressor="auto" uses the fp32 CoreML regressor next to the npz (exact: vertices within
+# 0.05 mm of the reference, ~0.4 ms on the CPU) and falls back to the numpy MLP. The fp16
+# Neural Engine export (mano2somax_regressor_ane.mlpackage) is only ~0.1 ms faster and
+# costs up to ~1.5 mm at the fingertips, so it has to be requested explicitly by path.
+AUTO_REGRESSOR_NAMES = ("mano2somax_regressor_fp32.mlpackage",)
 
 
 class SomaOverlay:
@@ -116,7 +116,8 @@ class SomaOverlay:
         if mlpackage and "fp32" in os.path.basename(mlpackage):
             compute_units = "CPU_ONLY"
         self.stage = SomaStageNumpy(npz, regressor_mlpackage=mlpackage, compute_units=compute_units)
-        self.regressor_backend = "coreml" if mlpackage else "numpy"
+        self.regressor_backend = f"CoreML {os.path.basename(mlpackage)}" if mlpackage else "numpy"
+        self.regressor_path = mlpackage
         self.faces = self.stage.faces
         self.lod = self.stage.lod
         self._interp = None

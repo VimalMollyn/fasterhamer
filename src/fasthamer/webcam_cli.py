@@ -301,9 +301,9 @@ def build_parser():
     ap.add_argument("--soma-lod", default="mid", choices=["mid", "low"],
                     help="SOMA hand mesh resolution (default mid, 2859 verts; torch engine only)")
     ap.add_argument("--soma-regressor", default="auto", metavar="auto|numpy|PATH",
-                    help="npz engine: run the regressor MLP as a CoreML model (PATH to the "
-                         "exported .mlpackage; 'auto' = mano2somax_regressor_ane.mlpackage next to "
-                         "the npz if present) or in numpy")
+                    help="npz engine: run the regressor MLP as a CoreML model (PATH to an exported "
+                         ".mlpackage; 'auto' = the fp32 mano2somax_regressor_fp32.mlpackage next to "
+                         "the npz, numpy if it is missing) or in numpy")
     ap.add_argument("--mano-pkl", default=None, metavar="PATH",
                     help="MANO_RIGHT.pkl for the SOMA fit-error readout (default: the copy in "
                          "the fasthamer cache)")
@@ -337,7 +337,8 @@ def main(argv=None) -> int:
         t = time.time()
         soma = SomaOverlay(args.soma, lod=args.soma_lod, mano_pkl=args.mano_pkl,
                            regressor=args.soma_regressor, compute_units=args.compute_units)
-        engine = soma.engine + (f"/{soma.regressor_backend} regressor" if soma.engine == "numpy" else "")
+        engine = soma.engine if soma.engine == "torch" else \
+            f"{soma.stage.backend} geometry + {soma.regressor_backend} regressor"
         print(f"[fasthamer] SOMA-X overlay ready in {time.time() - t:.1f} s ({engine}; "
               f"{'with' if soma.can_measure else 'without'} fit-error readout)", flush=True)
         soma_renderers = {}
