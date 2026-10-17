@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fasthamer"
-version = "0.6.0"
-description = "Realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine: image in, MANO parameters + 3D/2D joints out"
+version = "0.7.0"
+description = "Realtime HaMeR 3D hand mesh recovery on the Apple Neural Engine: image in, 3D hand mesh (SOMA-X or MANO) + MANO parameters + 3D/2D joints out"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [{ name = "Vimal Mollyn", email = "vmollyn@andrew.cmu.edu" }]
-keywords = ["hand-tracking", "mano", "hamer", "coreml", "neural-engine", "3d-hand-pose"]
+keywords = ["hand-tracking", "mano", "soma-x", "hamer", "coreml", "neural-engine", "3d-hand-pose"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

@@ -1,18 +1,24 @@
 # fasthamer
 
 Realtime [HaMeR](https://github.com/geopavlakos/hamer) 3D hand mesh recovery on
-the Apple Neural Engine. Give it an image, get MANO parameters, 3D joints,
-camera parameters, and 2D joints per hand — a MediaPipe-Hands-style API, but
-with a full 3D hand mesh behind it.
+the Apple Neural Engine. Give it an image, get a 3D hand mesh, MANO
+parameters, 3D joints, camera parameters, and 2D joints per hand — a
+MediaPipe-Hands-style API, but with a full 3D hand mesh behind it.
 
 - **Fast**: the whole network (ViT-H backbone + MANO head) runs as one CoreML
-  program on the ANE, the MANO mesh is a sub-millisecond numpy step — ~30 FPS
+  program on the ANE and the mesh stage takes ~0.6 ms per hand — ~30 FPS
   end-to-end with two hands at 640px on a fanless M4 MacBook Air, torch-free
   at runtime.
-- **Simple**: `fasthamer.load()` → `result = hands(rgb)` → done.
+- **Simple**: `pip install fasthamer` → `fasthamer.load()` → `result = hands(rgb)`.
+  No accounts, no license forms: the default hand mesh is NVIDIA's
+  Apache-licensed [SOMA-X](https://github.com/NVlabs/SOMA-X) hand, regressed
+  from HaMeR's MANO parameters by [mano2soma-x](https://github.com/VimalMollyn/mano2soma-x)
+  (~2 mm from the MANO mesh). If you have a MANO license you can get the MANO
+  mesh instead (`hand_model="mano"`).
 - **Complete outputs**: MANO `global_orient` / `hand_pose` / `betas`
-  (rotation matrices *and* axis-angle), 778-vertex mesh, 21 3D joints,
-  camera intrinsics + per-hand translation, projected 2D joints.
+  (rotation matrices *and* axis-angle), the hand mesh (2859-vertex SOMA-X or
+  778-vertex MANO), 21 3D joints, camera intrinsics + per-hand translation,
+  projected 2D joints.
 - **Batteries included**: hand detection via
   [fasthands](https://github.com/VimalMollyn/Mediapipe-Hands-PyTorch-CoreML)
   (CoreML/ANE, ~1 ms) and a tiny C mesh rasterizer for overlays (~10x faster
@@ -22,34 +28,37 @@ Requires macOS on Apple Silicon.
 
 ## Install
 
-> **You need your own MANO model.** fasthamer computes the hand mesh with
-> [MANO](https://mano.is.tue.mpg.de), which is free for non-commercial
-> research but license-gated, so fasthamer does not ship it. Create an account
-> at https://mano.is.tue.mpg.de and **accept the MANO license** there; the
-> setup below then either uses a `MANO_RIGHT.pkl` / `mano_v1_2.zip` you already
-> have, or downloads `mano_v1_2.zip` with your MANO account email + password
-> (sent only to the MPI server, never stored).
-
 ```bash
 pip install fasthamer
-fasthamer-setup                           # or: fasthamer-setup --mano ~/Downloads/mano_v1_2.zip
 fasthamer-webcam --mirror                 # live demo: 3D mesh overlay from your webcam
 ```
 
-`fasthamer-setup` runs once. It (1) imports your MANO model into
-`~/.cache/fasthamer/mano/` — prompting for a path or for your MANO account if
-it can't find one — and (2) downloads the prebuilt CoreML model bundle
-(~470 MB, no MANO data inside) into `~/.cache/fasthamer`. If you skip this
-step, the same prompts run on your first `fasthamer.load()`.
+That's it. The first `fasthamer.load()` (or `fasthamer-setup`, if you prefer
+to pre-download) fetches the CoreML model bundle (~470 MB) and the SOMA-X hand
+assets (~40 MB) into `~/.cache/fasthamer`, then compiles the model for your
+device (one-time, typically 10-30 s). Every load after that takes a couple of
+seconds and works offline.
 
-The **first** `fasthamer.load()` also compiles the model for your device
-(one-time, typically 10-30 s) and caches the compiled `.mlmodelc`; every load
-after that takes a couple of seconds.
+### Optional: the MANO mesh
 
-Non-interactive environments (CI, scripts): point `FASTHAMER_MANO_PATH` at
-your `MANO_RIGHT.pkl` / `mano_v1_2` folder / `mano_v1_2.zip`, or set
-`MANO_USERNAME` and `MANO_PASSWORD` to let `fasthamer-setup` download it.
-`python -m fasthamer.mano_download` downloads the zip on its own.
+`hand_model="mano"` gives you the 778-vertex [MANO](https://mano.is.tue.mpg.de)
+mesh instead of the SOMA-X hand. MANO is free for non-commercial research but
+license-gated, so fasthamer does not ship it: create an account at
+https://mano.is.tue.mpg.de, accept the license there, then
+
+```bash
+fasthamer-setup --mano                           # prompts for a path, or Enter to download with your account
+fasthamer-setup --mano ~/Downloads/mano_v1_2.zip # or use the file you already have
+fasthamer-webcam --mirror --hand-model mano
+```
+
+fasthamer either imports a `MANO_RIGHT.pkl` / `mano_v1_2` folder / zip you
+already have, or downloads `mano_v1_2.zip` with your MANO account email +
+password (sent only to the MPI server, never stored), and converts it once to a
+small `.npz` in `~/.cache/fasthamer/mano/`. The same prompt runs on the first
+`load(hand_model="mano")` if you skip setup. Non-interactive environments:
+point `FASTHAMER_MANO_PATH` at your file, or set `MANO_USERNAME` and
+`MANO_PASSWORD`; `python -m fasthamer.mano_download` downloads the zip on its own.
 
 ## Quickstart
 
@@ -57,7 +66,7 @@ your `MANO_RIGHT.pkl` / `mano_v1_2` folder / `mano_v1_2.zip`, or set
 import cv2
 import fasthamer
 
-hands = fasthamer.load()                       # mode="image" by default
+hands = fasthamer.load()                       # mode="image", hand_model="soma" by default
 rgb = cv2.cvtColor(cv2.imread("photo.jpg"), cv2.COLOR_BGR2RGB)
 result = hands(rgb)
 
@@ -66,7 +75,8 @@ for hand in result:
     hand.keypoints_2d      # (21, 2)  pixels in the input image
     hand.keypoints_3d      # (21, 3)  meters, hand-centered
     hand.keypoints_camera  # (21, 3)  meters, camera frame (= keypoints_3d + cam_t)
-    hand.vertices          # (778, 3) MANO mesh, hand-centered
+    hand.vertices          # (2859, 3) SOMA-X hand mesh, hand-centered (778 with hand_model="mano")
+    hand.soma_joints       # (25, 3)  SOMA-X skeleton joints (None with hand_model="mano")
     hand.cam_t             # (3,)     hand -> camera translation
     hand.global_orient     # (3, 3)   MANO global orientation (rotation matrix)
     hand.hand_pose         # (15, 3, 3) MANO pose  (also .hand_pose_aa / .global_orient_aa)
@@ -96,6 +106,8 @@ the reconstructed meshes in realtime:
 
 ```bash
 fasthamer-webcam --mirror              # selfie view
+fasthamer-webcam --hand-model mano     # MANO mesh instead of SOMA-X (needs fasthamer-setup --mano)
+fasthamer-webcam --soma                # MANO vs SOMA-X comparison view (blend/flicker/wire, key 'o')
 fasthamer-webcam --skeleton            # 2D joints instead of the mesh
 fasthamer-webcam --camera 0            # pick a camera (auto-probed by default)
 fasthamer-webcam --stabilize           # lock Right/Left per hand across frames
@@ -134,13 +146,17 @@ Examples:
   (or use the `*_camera` properties) for camera-frame coordinates. Projection
   uses the pinhole camera in the result (`result.project(pts)`).
 - Joint order is MANO/OpenPose-style: wrist, then 4 joints each for thumb,
-  index, middle, ring, pinky (`fasthamer.HAND_EDGES` has the skeleton).
+  index, middle, ring, pinky (`fasthamer.HAND_EDGES` has the skeleton). With
+  the SOMA-X hand these are the SOMA skeleton's MCP/PIP/DIP/tip joints (and the
+  MANO wrist position); they sit within a few mm of MANO's regressed joints,
+  except the MCP row which is ~1 cm further down the palm. `hand.soma_joints`
+  has all 25 SOMA joints.
 - **Left hands**: HaMeR mirrors left-hand crops, so MANO parameters always
   describe a *right* MANO hand. `vertices`/`keypoints_3d` are already
   un-mirrored. To re-pose a left hand yourself, apply the params to a
   right-hand MANO model and negate x.
-- `hands.faces` gives the (1538, 3) triangle faces (flip winding for left
-  hands).
+- `hands.faces` gives the triangle faces of the active hand model (SOMA-X
+  5692, MANO 1538); flip winding for left hands.
 
 ## Options
 
@@ -148,11 +164,13 @@ Examples:
 fasthamer.load(
     mode="image",             # or "video"
     max_hands=2,
+    hand_model="soma",        # "soma" (SOMA-X hand, no MANO needed) or "mano"
     detector="fasthands",     # detection stack: "fasthands" or "mediapipe"
     fasthands_detector=None,  # model inside fasthands: "whim" or "mediapipe"
     model_dir=None,           # local model bundle dir (skips the download)
-    mano_path=None,           # your MANO_RIGHT.pkl / mano_v1_2 folder / zip
-                              #   (default: the copy cached by fasthamer-setup)
+    soma_dir=None,            # local SOMA-X asset dir (skips the download)
+    mano_path=None,           # hand_model="mano": your MANO_RIGHT.pkl / mano_v1_2 folder / zip
+                              #   (default: the copy cached by fasthamer-setup --mano)
     rescale_factor=2.0,       # hand-box padding before cropping
     swap_handedness=False,    # if handedness looks inverted (mirrored inputs)
     stabilize_handedness=False,  # video: lock R/L per hand across frames
@@ -223,11 +241,12 @@ For rigs where handedness is known and fixed (single-hand egocentric mounts),
 constraint that takes precedence over the tracker. Both are orthogonal to
 `swap_handedness`, which is a global flip applied by the detector.
 
-Environment variables: `FASTHAMER_MANO_PATH` points at your MANO model
-(`MANO_RIGHT.pkl`, `mano_v1_2/`, or `mano_v1_2.zip`); `MANO_USERNAME` /
-`MANO_PASSWORD` let setup download it non-interactively; `FASTHAMER_MODEL_DIR`
-points at a local model bundle; `FASTHAMER_ASSETS_URL` overrides where the
-bundle is downloaded from.
+Environment variables: `FASTHAMER_MODEL_DIR` / `FASTHAMER_SOMA_DIR` point at
+a local model bundle / SOMA-X asset directory; `FASTHAMER_ASSETS_URL` /
+`FASTHAMER_SOMA_ASSETS_URL` override where they are downloaded from;
+`FASTHAMER_MANO_PATH` points at your MANO model (`MANO_RIGHT.pkl`,
+`mano_v1_2/`, or `mano_v1_2.zip`); `MANO_USERNAME` / `MANO_PASSWORD` let setup
+download it non-interactively.
 
 ## How it works
 
@@ -235,9 +254,23 @@ MediaPipe-style palm detection (fasthands, ANE) finds hand boxes; each box is
 cropped HaMeR-style and run through a single CoreML mlprogram containing the
 ViT-H backbone (192×144 input, interpolated position embeddings) and the MANO
 transformer head — 6-bit palettized weights — which outputs the MANO
-parameters and camera. The MANO mesh itself (778 vertices, 21 joints) is then
-computed in numpy from *your* `MANO_RIGHT.pkl` (`fasthamer.mano`, ~0.5 ms per
-hand, no chumpy/scipy/torch); it matches HaMeR's smplx MANO layer to 1e-7 m.
+parameters and camera.
+
+The mesh stage then runs without torch:
+
+- **SOMA-X hand (default).** The
+  [mano2soma-x](https://github.com/VimalMollyn/mano2soma-x) ResMLP maps the
+  MANO parameters to SOMA-X hand parameters (25 joint rotations, 20 identity
+  coefficients, 24 bone scales, root translation); it runs as a CoreML model
+  (fp32, ~0.4 ms). SOMA-X's hand model (identity PCA, closed-form skeleton
+  fit, forward kinematics, skinning) is re-implemented in C
+  (`fasthamer.soma_np` / `soma_stage.c`, ~0.15 ms per hand) and matches the
+  reference py-soma-x implementation to 0.05 mm. The regressed SOMA hand is
+  within ~2 mm (mean vertex distance) of the MANO mesh HaMeR implies.
+- **MANO hand (`hand_model="mano"`).** The MANO mesh (778 vertices) is
+  computed in numpy from *your* `MANO_RIGHT.pkl` (`fasthamer.mano`, ~0.5 ms
+  per hand, no chumpy/scipy); it matches HaMeR's smplx MANO layer to 1e-7 m.
+
 End-to-end outputs match the reference HaMeR torch pipeline to a few mm
 (fp16 + palettization noise). The overlay renderer is a small C rasterizer
 with supersampled anti-aliasing, compiled once on first use.
@@ -246,9 +279,14 @@ with supersampled anti-aliasing, compiled once on first use.
 
 Code: MIT. The CoreML model bundle is converted from the MIT-licensed
 [HaMeR](https://github.com/geopavlakos/hamer) checkpoint and contains no MANO
-data. The MANO model is licensed by the Max Planck Institute for
-non-commercial scientific research and is obtained by *you* from your own
-account at https://mano.is.tue.mpg.de under its
-[license](https://mano.is.tue.mpg.de/license.html); fasthamer only reads the
-copy you provide. Cite [HaMeR](https://arxiv.org/abs/2312.05251) and
+data. The SOMA-X hand model data is NVIDIA's
+[SOMA-X](https://github.com/NVlabs/SOMA-X) (Apache-2.0). The mano2soma-x
+regressor was trained on HaMeR's training annotations, which come from
+research-only datasets and MANO fits, so treat it — like the HaMeR weights
+themselves — as a research asset. The MANO model (`hand_model="mano"`) is
+licensed by the Max Planck Institute for non-commercial scientific research
+and is obtained by *you* from your own account at https://mano.is.tue.mpg.de
+under its [license](https://mano.is.tue.mpg.de/license.html); fasthamer only
+reads the copy you provide. Cite [HaMeR](https://arxiv.org/abs/2312.05251),
+[SOMA](https://arxiv.org/abs/2603.16858) and
 [MANO](https://mano.is.tue.mpg.de) in academic work.

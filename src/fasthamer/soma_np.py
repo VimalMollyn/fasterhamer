@@ -62,6 +62,19 @@ NUM_IDENTITY = 20
 NUM_SCALES = 24
 ROT6D_IDENTITY = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=np.float32)
 
+# SOMA right-hand joints: 0 wrist; thumb 1-3 + 4 tip; index/middle/ring/pinky each
+# metacarpal base, MCP, PIP, DIP, tip (5-9, 10-14, 15-19, 20-24).
+SOMA_JOINT_NAMES = ["Hand", "Thumb1", "Thumb2", "Thumb3", "ThumbEnd",
+                    "Index1", "Index2", "Index3", "Index4", "IndexEnd",
+                    "Middle1", "Middle2", "Middle3", "Middle4", "MiddleEnd",
+                    "Ring1", "Ring2", "Ring3", "Ring4", "RingEnd",
+                    "Pinky1", "Pinky2", "Pinky3", "Pinky4", "PinkyEnd"]
+# fasthamer's 21 OpenPose-order keypoints from the SOMA skeleton: index 0 (wrist) is the
+# MANO wrist joint, which is the origin of the regressor's output frame; the finger
+# entries are SOMA's MCP/PIP/DIP/tip joints (the metacarpal bases are skipped).
+OPENPOSE_FROM_SOMA = np.array([1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14,
+                               16, 17, 18, 19, 21, 22, 23, 24], dtype=np.int64)
+
 
 # ----------------------------------------------------------------------------
 # small math helpers
@@ -280,6 +293,9 @@ class SomaStageNumpy:
                              tet=d["bary_F_src_tet"].astype(np.int64)[d["bary_face_ids"].astype(np.int64)],  # (S, 4)
                              bc=d["bary_coords"].astype(np.float64))                                      # (S, 4)
         self.valid_verts = d["valid_verts"].astype(bool) if "valid_verts" in d else None
+        # MANO wrist position in MANO's own frame as an affine function of betas
+        self.wrist_bias = d["wrist_bias"].astype(np.float64) if "wrist_bias" in d else None
+        self.wrist_shapedirs = d["wrist_shapedirs"].astype(np.float64) if "wrist_shapedirs" in d else None
         # C backend
         self._c = None
         self._ctx = None
@@ -348,7 +364,7 @@ class SomaStageNumpy:
     def _load_coreml_regressor(self, mlpackage: str, compute_units: str) -> None:
         import coremltools as ct
         from .inference import _load_prediction_model
-        self.coreml = _load_prediction_model(mlpackage, getattr(ct.ComputeUnit, compute_units))
+        self.coreml = _load_prediction_model(mlpackage, getattr(ct.ComputeUnit, compute_units), quiet=True)
         self._coreml_batches = None
         try:  # enumerated batch sizes the model was exported with
             desc = ct.models.MLModel(mlpackage, skip_model_load=True).get_spec().description
@@ -525,6 +541,21 @@ class SomaStageNumpy:
         T_world = self._fk(p["pose"], local_t)
         verts = self._lbs(rest_bind, self.skin_W, T_world @ _se3_inverse(T_bind))
         return verts, T_world[:, :, :3, 3]
+
+    # ---- frames / keypoints -------------------------------------------------
+    def mano_wrist(self, betas: np.ndarray) -> np.ndarray:
+        """(B,10) -> (B,3): the MANO wrist joint in MANO's frame (= the offset between
+        MANO's origin, which HaMeR's camera translation refers to, and this stage's
+        wrist-centred output frame)."""
+        if self.wrist_bias is None:
+            raise RuntimeError("this asset file has no MANO wrist map (re-export with the MANO pkl)")
+        return np.asarray(betas, np.float64).reshape(-1, 10) @ self.wrist_shapedirs.T + self.wrist_bias
+
+    @staticmethod
+    def keypoints21(joints25: np.ndarray) -> np.ndarray:
+        """(B,25,3) SOMA joints (wrist-centred frame) -> (B,21,3) OpenPose-order keypoints."""
+        B = joints25.shape[0]
+        return np.concatenate([np.zeros((B, 1, 3)), joints25[:, OPENPOSE_FROM_SOMA]], axis=1)
 
     # ---- fit metric ----------------------------------------------------------
     def mano_to_soma(self, mano_verts: np.ndarray) -> np.ndarray:

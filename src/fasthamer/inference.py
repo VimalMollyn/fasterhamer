@@ -1,9 +1,10 @@
 """CoreML inference for HaMeR (ViT-H backbone + MANO head in one mlpackage) on
-the Apple Neural Engine, followed by the MANO mesh in numpy from the user's own
-MANO model. Pure numpy I/O — no torch.
+the Apple Neural Engine, followed by the hand mesh: either the SOMA-X hand
+regressed from the MANO parameters (`fasthamer.soma_np`, default) or the MANO
+mesh from the user's own MANO model (`fasthamer.mano`). Pure numpy I/O — no torch.
 
 Legacy bundles that have the MANO mesh baked into the mlpackage (outputs
-`vertices` / `keypoints3d`) are still supported and need no MANO file."""
+`vertices` / `keypoints3d`) are still supported for hand_model="mano"."""
 import hashlib
 import os
 import shutil
@@ -14,7 +15,7 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
-from .assets import FACES_NAME, bundle_model_path, cache_dir
+from .assets import FACES_NAME, bundle_model_path, cache_dir, soma_paths
 from .mano import ManoRight, load_mano_npz
 from .preprocess import HandCrop, IMAGE_SIZE
 
@@ -25,7 +26,7 @@ def _compiled_cache_path(mlpackage_path: str) -> str:
     return os.path.join(cache_dir(), "compiled", f"hamer_mano_{key}.mlmodelc")
 
 
-def _load_prediction_model(mlpackage_path: str, units):
+def _load_prediction_model(mlpackage_path: str, units, quiet: bool = False):
     """Load the CoreML model for prediction, compiling the mlpackage to a
     persistent .mlmodelc on first use and reusing it thereafter.
 
@@ -44,9 +45,10 @@ def _load_prediction_model(mlpackage_path: str, units):
         except Exception:
             shutil.rmtree(compiled, ignore_errors=True)  # stale/corrupt; rebuild
 
-    sys.stderr.write("[fasthamer] compiling the model for your device "
-                     "(one-time, typically 10-30 s; cached for next time)...\n")
-    sys.stderr.flush()
+    if not quiet:
+        sys.stderr.write("[fasthamer] compiling the model for your device "
+                         "(one-time, typically 10-30 s; cached for next time)...\n")
+        sys.stderr.flush()
     # Compile the mlpackage straight to a .mlmodelc with `compile_model` (a pure
     # spec -> mlmodelc step, ~0.1 s). Do NOT do this by instantiating
     # `MLModel(mlpackage, compute_units=CPU_ONLY)` and copying its compiled
@@ -76,20 +78,23 @@ def _load_prediction_model(mlpackage_path: str, units):
     # This load is where the (one-time) Neural Engine compilation happens.
     t0 = time.time()
     model = ct.models.CompiledMLModel(compiled, compute_units=units)
-    sys.stderr.write(f"[fasthamer] model ready ({time.time() - t0:.0f} s); "
-                     "later loads will be fast.\n")
-    sys.stderr.flush()
+    if not quiet:
+        sys.stderr.write(f"[fasthamer] model ready ({time.time() - t0:.0f} s); "
+                         "later loads will be fast.\n")
+        sys.stderr.flush()
     return model
 
 
 class CoreMLHamer:
-    """image crop -> MANO params (CoreML) -> vertices + 21 joints (numpy MANO).
+    """image crop -> MANO params (CoreML) -> hand mesh + 21 joints.
 
-    `mano_npz` is the user's MANO model as cached by `fasthamer.assets`
-    (required unless the bundle is a legacy one with the mesh baked in)."""
+    Pass `soma_dir` (SOMA-X assets, see `fasthamer.assets.resolve_soma_dir`) for
+    the SOMA-X hand, or `mano_npz` (the user's MANO model as cached by
+    `fasthamer.assets`) for the MANO mesh; a legacy bundle with the MANO mesh
+    baked in needs neither."""
 
     def __init__(self, model_dir: str, compute_units: str = "CPU_AND_NE",
-                 mano_npz: Optional[str] = None):
+                 mano_npz: Optional[str] = None, soma_dir: Optional[str] = None):
         import coremltools as ct
         units = getattr(ct.ComputeUnit, compute_units)
         mlpackage, legacy = bundle_model_path(model_dir)
@@ -105,6 +110,18 @@ class CoreMLHamer:
         self.has_mesh = {"vertices", "keypoints3d"} <= self.output_names
 
         self.mano: Optional[ManoRight] = None
+        self.soma = None
+        if soma_dir is not None:
+            if not self.has_mano_params:
+                raise RuntimeError(f"{mlpackage} does not output MANO parameters, which the "
+                                   f"SOMA-X hand needs (outputs: {sorted(self.output_names)})")
+            from .soma_np import SomaStageNumpy
+            npz, regressor = soma_paths(soma_dir)
+            self.soma = SomaStageNumpy(npz, regressor_mlpackage=regressor, compute_units="CPU_ONLY")
+            self.faces = self.soma.faces
+            self.hand_model = "soma"
+            return
+        self.hand_model = "mano"
         if self.has_mesh:  # legacy fused bundle: mesh comes out of CoreML
             self.faces = np.load(os.path.join(model_dir, FACES_NAME)) if legacy \
                 else ManoRight(load_mano_npz(mano_npz)).faces
@@ -136,7 +153,16 @@ class CoreMLHamer:
             pred["global_orient"] = np.asarray(out["global_orient"][0], dtype=np.float64)
             pred["hand_pose"] = np.asarray(out["hand_pose"][0], dtype=np.float64)
             pred["betas"] = np.asarray(out["betas"][0], dtype=np.float64)
-        if self.mano is not None:
+        if self.soma is not None:
+            # SOMA stage outputs are wrist-centred; shift them into MANO's frame, which
+            # is what HaMeR's camera translation refers to.
+            v, j = self.soma.forward(pred["hand_pose"][None], pred["betas"][None],
+                                     pred["global_orient"][None])
+            wrist = self.soma.mano_wrist(pred["betas"][None])[0]
+            pred["vertices"] = v[0] + wrist
+            pred["soma_joints"] = j[0] + wrist
+            pred["keypoints3d"] = self.soma.keypoints21(j)[0] + wrist
+        elif self.mano is not None:
             pred["vertices"], pred["keypoints3d"] = self.mano(
                 pred["global_orient"], pred["hand_pose"], pred["betas"])
         else:

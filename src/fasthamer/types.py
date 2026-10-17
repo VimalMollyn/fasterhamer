@@ -34,20 +34,27 @@ class Hand:
     MANO parameters always describe a *right* MANO hand: left hands are mirrored
     through the crop pipeline, so to pose a left hand mesh apply the params to a
     right-hand MANO model and negate x (exactly what `vertices` already has done).
+
+    `hand_model` says which mesh `vertices` holds: "soma" (default) is the
+    SOMA-X hand (2859 vertices, `soma_joints` = its 25 skeleton joints) regressed
+    from the MANO parameters; "mano" is the MANO mesh (778 vertices) from your own
+    MANO model. `keypoints_3d` is always the 21-joint OpenPose-order skeleton.
     """
     is_right: bool
     bbox: np.ndarray                       # (4,) detector box, xyxy pixels
-    vertices: np.ndarray                   # (778, 3) hand-centered mesh, meters
+    vertices: np.ndarray                   # (V, 3) hand-centered mesh, meters (V=2859 soma / 778 mano)
     keypoints_3d: np.ndarray               # (21, 3) hand-centered joints, meters
     cam_t: np.ndarray                      # (3,) translation hand -> camera frame
     keypoints_2d: np.ndarray               # (21, 2) pixels in the input image
     global_orient: Optional[np.ndarray] = None  # (3, 3) rotation matrix
     hand_pose: Optional[np.ndarray] = None      # (15, 3, 3) rotation matrices
     betas: Optional[np.ndarray] = None          # (10,) MANO shape
+    hand_model: str = "mano"                    # "soma" or "mano": which mesh `vertices` is
+    soma_joints: Optional[np.ndarray] = None    # (25, 3) SOMA skeleton joints, hand-centered (soma only)
 
     @property
     def vertices_camera(self) -> np.ndarray:
-        """(778, 3) mesh vertices in the camera frame."""
+        """(V, 3) mesh vertices in the camera frame."""
         return self.vertices + self.cam_t
 
     @property

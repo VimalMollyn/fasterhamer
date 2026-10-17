@@ -2,11 +2,12 @@
 
     import fasthamer
 
-    hands = fasthamer.load(mode="video")      # or mode="image"
+    hands = fasthamer.load(mode="video")      # or mode="image"; hand_model="soma" (default) / "mano"
     result = hands(rgb_frame)                 # HandMeshResult
     for hand in result:
         hand.keypoints_2d      # (21, 2) pixels
         hand.keypoints_3d      # (21, 3) meters, hand-centered
+        hand.vertices          # (2859, 3) SOMA-X hand mesh (778 with hand_model="mano")
         hand.cam_t             # (3,) hand -> camera translation
         hand.global_orient     # (3, 3) MANO global orientation
         hand.hand_pose         # (15, 3, 3) MANO pose (also .hand_pose_aa)
@@ -19,7 +20,7 @@ from .stabilize import HandednessStabilizer
 from .tracker import HandMesh, load
 from .types import HAND_EDGES, Hand, HandMeshResult
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = ["load", "HandMesh", "Hand", "HandMeshResult", "MeshRenderer", "ManoRight",
            "draw_landmarks", "draw_wireframe", "HandednessStabilizer", "HAND_EDGES", "MESH_COLOR",
            "__version__"]

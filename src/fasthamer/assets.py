@@ -1,17 +1,21 @@
 """Model asset management + first-run setup.
 
-fasthamer needs two things on disk, both kept in `~/.cache/fasthamer`:
+Everything lives in `~/.cache/fasthamer` and is fetched on first use:
 
   1. **The CoreML model bundle** (ViT-H backbone + MANO head, ~470 MB) —
-     downloaded from the GitHub release on first use. It contains no MANO
-     data: it stops at the MANO *parameters*.
-  2. **Your own MANO model** (`MANO_RIGHT.pkl`). MANO is license-gated
-     (https://mano.is.tue.mpg.de, free for non-commercial research), so
-     fasthamer never ships it. On first use (or via `fasthamer-setup`) you
-     either point fasthamer at a copy you already have, or let it download
-     `mano_v1_2.zip` with your MANO account credentials (sent only to MPI,
-     never stored). The pkl is converted once to a small `.npz`; the mesh is
-     then computed in numpy at runtime (see `fasthamer.mano`).
+     downloaded from the GitHub release. It contains no MANO data: it stops
+     at the MANO *parameters*.
+  2. **The SOMA-X hand assets** (~40 MB, default `hand_model="soma"`): the
+     mano2soma-x regressor (CoreML + npz) and NVIDIA's Apache-licensed SOMA-X
+     right-hand model data, downloaded from the GitHub release. No account,
+     no prompt (see `fasthamer.soma_np`).
+  3. **Your own MANO model** (`MANO_RIGHT.pkl`), only for `hand_model="mano"`.
+     MANO is license-gated (https://mano.is.tue.mpg.de, free for
+     non-commercial research), so fasthamer never ships it. `fasthamer-setup
+     --mano` (or the first `load(hand_model="mano")`) either imports a copy
+     you already have or downloads `mano_v1_2.zip` with your MANO account
+     credentials (sent only to MPI, never stored). The pkl is converted once
+     to a small `.npz`; the mesh is then computed in numpy (`fasthamer.mano`).
 
 Resolution order for the MANO model:
   1. `mano_path=` argument to `fasthamer.load()` / `HandMesh()` /
@@ -28,6 +32,9 @@ Resolution order for the model bundle directory:
   1. `model_dir=` argument to `fasthamer.load()` / `HandMesh()`
   2. the FASTHAMER_MODEL_DIR environment variable
   3. the fasthamer cache, populated by the first-run download
+
+Resolution order for the SOMA-X asset directory (same idea):
+  `soma_dir=` argument, FASTHAMER_SOMA_DIR, the cache (first-run download).
 
 A current bundle directory contains `hamer_params.mlpackage`. Legacy bundles
 (`hamer_mano.mlpackage` + `mano_faces.npy`, mesh baked in) still load and
@@ -51,6 +58,14 @@ ASSETS_URL = ("https://github.com/VimalMollyn/fasterhamer/releases/download/"
 # sha256 of the assets zip; update alongside ASSETS_URL when publishing a bundle.
 ASSETS_SHA256: Optional[str] = \
     "5ff4745a5a0cc48b1bd18e55867f177cccb982d1dc1dd1d6b06090c3e0a5e7d8"
+
+SOMA_ASSETS_VERSION = 1
+SOMA_ASSETS_URL = ("https://github.com/VimalMollyn/fasterhamer/releases/download/"
+                   f"soma-v{SOMA_ASSETS_VERSION}/fasthamer-soma-v{SOMA_ASSETS_VERSION}.zip")
+SOMA_ASSETS_SHA256: Optional[str] = \
+    "cfffbcbb60f61259635dde868fbf13232c7dae3660e394359c3351210ba6783d"
+SOMA_NPZ_NAME = "mano2somax_resmlp512x4_numpy.npz"
+SOMA_REGRESSOR_NAME = "mano2somax_regressor_fp32.mlpackage"
 
 MODEL_NAME = "hamer_params.mlpackage"        # backbone + MANO head (no MANO data)
 LEGACY_MODEL_NAME = "hamer_mano.mlpackage"   # v1 bundles: MANO mesh baked in
@@ -126,38 +141,43 @@ def _download(url: str, dest: str, label: str) -> None:
     sys.stderr.write("\n")
 
 
-def _fetch_bundle(dest: str) -> None:
-    """Download + extract the prebuilt CoreML bundle into `dest`."""
-    url = os.environ.get("FASTHAMER_ASSETS_URL", ASSETS_URL)
+def _fetch_zip(url: str, sha256: Optional[str], dest: str, is_valid, label: str,
+               hint: str) -> None:
+    """Download a zip, verify it, extract it and move the directory that satisfies
+    `is_valid` (the zip root or a single top-level folder) to `dest`."""
     os.makedirs(cache_dir(), exist_ok=True)
     with tempfile.TemporaryDirectory(dir=cache_dir()) as tmp:
         zip_path = os.path.join(tmp, "assets.zip")
         try:
-            _download(url, zip_path, "CoreML model bundle")
+            _download(url, zip_path, label)
         except Exception as e:
-            raise RuntimeError(
-                f"failed to download the fasthamer model bundle from {url} — "
-                "check your connection, or set FASTHAMER_MODEL_DIR / pass "
-                "model_dir= to point at a local bundle") from e
-        if ASSETS_SHA256 is not None and url == ASSETS_URL:
+            raise RuntimeError(f"failed to download the fasthamer {label} from {url} — "
+                               f"check your connection, or {hint}") from e
+        if sha256 is not None:
             digest = _sha256(zip_path)
-            if digest != ASSETS_SHA256:
-                raise RuntimeError(
-                    f"model bundle checksum mismatch (got {digest}, "
-                    f"expected {ASSETS_SHA256}) — the download may be corrupt")
+            if digest != sha256:
+                raise RuntimeError(f"{label} checksum mismatch (got {digest}, expected "
+                                   f"{sha256}) — the download may be corrupt")
         extract_dir = os.path.join(tmp, "extracted")
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(extract_dir)
-        # Accept both a flat zip and one with a single top-level directory.
         root = extract_dir
-        if not _is_bundle(root):
+        if not is_valid(root):
             entries = [os.path.join(root, e) for e in os.listdir(root)]
-            subdirs = [e for e in entries if os.path.isdir(e) and _is_bundle(e)]
+            subdirs = [e for e in entries if os.path.isdir(e) and is_valid(e)]
             if not subdirs:
-                raise RuntimeError(f"downloaded bundle from {url} has an "
-                                   f"unexpected layout: {os.listdir(root)}")
+                raise RuntimeError(f"downloaded {label} from {url} has an unexpected "
+                                   f"layout: {os.listdir(root)}")
             root = subdirs[0]
         shutil.move(root, dest)
+
+
+def _fetch_bundle(dest: str) -> None:
+    """Download + extract the prebuilt CoreML bundle into `dest`."""
+    url = os.environ.get("FASTHAMER_ASSETS_URL", ASSETS_URL)
+    _fetch_zip(url, ASSETS_SHA256 if url == ASSETS_URL else None, dest, _is_bundle,
+               "CoreML model bundle",
+               "set FASTHAMER_MODEL_DIR / pass model_dir= to point at a local bundle")
 
 
 def resolve_model_dir(model_dir: Optional[str] = None, download: bool = True,
@@ -176,6 +196,42 @@ def resolve_model_dir(model_dir: Optional[str] = None, download: bool = True,
     if not download:
         raise FileNotFoundError(f"model bundle not found at {cached}")
     _fetch_bundle(cached)
+    return cached
+
+
+# ----------------------------------------------------------------------------
+# SOMA-X hand assets (default hand model; no license gate)
+# ----------------------------------------------------------------------------
+def soma_paths(soma_dir: str) -> Tuple[str, Optional[str]]:
+    """(npz path, CoreML regressor path or None) inside a SOMA asset directory."""
+    npz = os.path.join(soma_dir, SOMA_NPZ_NAME)
+    reg = os.path.join(soma_dir, SOMA_REGRESSOR_NAME)
+    return npz, (reg if os.path.isdir(reg) else None)
+
+
+def _is_soma_dir(path: str) -> bool:
+    return os.path.isfile(os.path.join(path, SOMA_NPZ_NAME))
+
+
+def resolve_soma_dir(soma_dir: Optional[str] = None, download: bool = True) -> str:
+    """Return the directory holding the SOMA-X assets, downloading them into the
+    cache on first use."""
+    for cand in (soma_dir, os.environ.get("FASTHAMER_SOMA_DIR")):
+        if cand:
+            cand = os.path.expanduser(cand)
+            if _is_soma_dir(cand):
+                return cand
+            raise FileNotFoundError(f"'{cand}' is not a fasthamer SOMA asset directory "
+                                    f"(expected {SOMA_NPZ_NAME} inside it)")
+    cached = os.path.join(cache_dir(), f"soma-v{SOMA_ASSETS_VERSION}")
+    if _is_soma_dir(cached):
+        return cached
+    if not download:
+        raise FileNotFoundError(f"SOMA assets not found at {cached}")
+    url = os.environ.get("FASTHAMER_SOMA_ASSETS_URL", SOMA_ASSETS_URL)
+    _fetch_zip(url, SOMA_ASSETS_SHA256 if url == SOMA_ASSETS_URL else None, cached,
+               _is_soma_dir, "SOMA-X hand assets",
+               "set FASTHAMER_SOMA_DIR to a local copy, or use hand_model='mano'")
     return cached
 
 

@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 
-from .assets import bundle_model_path, resolve_mano, resolve_model_dir
+from .assets import bundle_model_path, resolve_mano, resolve_model_dir, resolve_soma_dir
 from .detection import make_detector
 from .inference import CoreMLHamer
 from .preprocess import cam_crop_to_full, preprocess_hands, scaled_focal_length
@@ -17,8 +17,9 @@ from .types import Hand, HandMeshResult
 class HandMesh:
     """Realtime 3D hand mesh recovery (HaMeR on the Apple Neural Engine).
 
-    Give it an RGB image; get MANO parameters, 3D joints/vertices, camera
-    params, and 2D joints per hand — MediaPipe-Hands style.
+    Give it an RGB image; get MANO parameters, a 3D hand mesh (SOMA-X by
+    default, or MANO with your own MANO model), 3D joints, camera params, and
+    2D joints per hand — MediaPipe-Hands style.
 
         import fasthamer
         hands = fasthamer.load(mode="video")
@@ -45,12 +46,18 @@ class HandMesh:
             mean different things: `detector="mediapipe"` is the separate
             TFLite Tasks stack, `fasthands_detector="mediapipe"` is the palm
             detector running on the ANE inside fasthands.
+        hand_model: "soma" (default) — the SOMA-X hand (2859 vertices,
+            Apache-licensed assets, nothing to register for) regressed from
+            HaMeR's MANO parameters; "mano" — the MANO mesh (778 vertices)
+            computed with your own license-gated MANO model.
         model_dir: directory holding the model bundle; defaults to the
             fasthamer cache (auto-downloaded on first use).
-        mano_path: your MANO model — `MANO_RIGHT.pkl`, the `mano_v1_2`
-            folder, or `mano_v1_2.zip`. Defaults to the copy cached by
-            `fasthamer-setup` (or FASTHAMER_MANO_PATH); if none exists you
-            are prompted for a path or for your MANO account to download it.
+        soma_dir: directory holding the SOMA-X assets; defaults to the
+            fasthamer cache (auto-downloaded on first use).
+        mano_path: (hand_model="mano") your MANO model — `MANO_RIGHT.pkl`, the
+            `mano_v1_2` folder, or `mano_v1_2.zip`. Defaults to the copy cached
+            by `fasthamer-setup --mano` (or FASTHAMER_MANO_PATH); if none exists
+            you are prompted for a path or for your MANO account to download it.
         rescale_factor: hand-box padding before cropping (HaMeR default 2.0).
         swap_handedness: flip left/right labels (use for mirrored inputs
             where handedness looks inverted).
@@ -78,7 +85,9 @@ class HandMesh:
     def __init__(self, mode: str = "image", max_hands: int = 2,
                  detector: str = "fasthands",
                  fasthands_detector: Optional[str] = None,
-                 model_dir: Optional[str] = None, mano_path: Optional[str] = None,
+                 hand_model: str = "soma",
+                 model_dir: Optional[str] = None, soma_dir: Optional[str] = None,
+                 mano_path: Optional[str] = None,
                  rescale_factor: float = 2.0, swap_handedness: bool = False,
                  stabilize_handedness: bool = False,
                  handedness_iou: float = 0.3, handedness_ttl: int = 10,
@@ -90,22 +99,30 @@ class HandMesh:
         if force_handedness not in (None, "right", "left"):
             raise ValueError("force_handedness must be 'right', 'left', or None, "
                              f"got '{force_handedness}'")
+        if hand_model not in ("soma", "mano"):
+            raise ValueError(f"hand_model must be 'soma' or 'mano', got '{hand_model}'")
         self.mode = mode
+        self.hand_model = hand_model
         self.rescale_factor = float(rescale_factor)
         self.swap_handedness = bool(swap_handedness)
         self.force_handedness = force_handedness
-        # Resolve MANO before the (large) bundle download so a first-run user
-        # is asked for their MANO file up front; an explicit legacy bundle
-        # (mesh baked in) needs no MANO file at all.
-        bundle = mano_npz = None
-        if model_dir or os.environ.get("FASTHAMER_MODEL_DIR"):
+        bundle = mano_npz = soma = None
+        if hand_model == "soma":
+            soma = resolve_soma_dir(soma_dir)
             bundle = resolve_model_dir(model_dir)
-        legacy = bundle is not None and bundle_model_path(bundle)[1]
-        if not legacy:
-            mano_npz = resolve_mano(mano_path)
-        if bundle is None:
-            bundle = resolve_model_dir(model_dir)
-        self.engine = CoreMLHamer(bundle, compute_units=compute_units, mano_npz=mano_npz)
+        else:
+            # Resolve MANO before the (large) bundle download so a first-run user
+            # is asked for their MANO file up front; an explicit legacy bundle
+            # (mesh baked in) needs no MANO file at all.
+            if model_dir or os.environ.get("FASTHAMER_MODEL_DIR"):
+                bundle = resolve_model_dir(model_dir)
+            legacy = bundle is not None and bundle_model_path(bundle)[1]
+            if not legacy:
+                mano_npz = resolve_mano(mano_path)
+            if bundle is None:
+                bundle = resolve_model_dir(model_dir)
+        self.engine = CoreMLHamer(bundle, compute_units=compute_units, mano_npz=mano_npz,
+                                  soma_dir=soma)
         self.detector = make_detector(detector, max_hands, video=(mode == "video"),
                                       fasthands_detector=fasthands_detector,
                                       compute_units=compute_units, **detector_kwargs)
@@ -120,7 +137,8 @@ class HandMesh:
 
     @property
     def faces(self) -> np.ndarray:
-        """(1538, 3) MANO triangle faces (right hand; flip winding for left)."""
+        """(F, 3) triangle faces of the hand mesh (SOMA-X: 5692, MANO: 1538), right
+        hand; flip winding for left hands."""
         return self.engine.faces
 
     def reset(self) -> None:
@@ -176,6 +194,9 @@ class HandMesh:
             verts[:, 0] = sign * verts[:, 0]
             kp3d = pred["keypoints3d"]
             kp3d[:, 0] = sign * kp3d[:, 0]
+            sj = pred.get("soma_joints")
+            if sj is not None:
+                sj[:, 0] = sign * sj[:, 0]
             go, hp = pred.get("global_orient"), pred.get("hand_pose")
             hand = Hand(
                 is_right=bool(s),
@@ -187,6 +208,8 @@ class HandMesh:
                 global_orient=None if go is None else go.reshape(3, 3),
                 hand_pose=None if hp is None else hp.reshape(15, 3, 3),
                 betas=pred.get("betas"),
+                hand_model=self.hand_model,
+                soma_joints=sj,
             )
             result.hands.append(hand)
         return result
@@ -200,7 +223,8 @@ class HandMesh:
         opts = {"color": tuple(color), "ambient": ambient, "alpha": alpha,
                 "antialias": antialias}
         if self._renderer is None or opts != self._renderer_opts:
-            self._renderer = MeshRenderer(self.engine.faces, **opts)
+            self._renderer = MeshRenderer(self.engine.faces, close_wrist=(self.hand_model == "mano"),
+                                          **opts)
             self._renderer_opts = opts
         return self._renderer.render(image_rgb, result)
 

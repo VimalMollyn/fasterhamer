@@ -286,14 +286,20 @@ def build_parser():
                          "or mediapipe (palm detector); needs fasthands>=0.4")
     ap.add_argument("--compute-units", default="CPU_AND_NE",
                     choices=["CPU_AND_NE", "ALL", "CPU_AND_GPU", "CPU_ONLY"])
+    ap.add_argument("--hand-model", default="soma", choices=["soma", "mano"],
+                    help="mesh to reconstruct: 'soma' (default, SOMA-X hand, no MANO needed) "
+                         "or 'mano' (needs your MANO model, see fasthamer-setup --mano)")
     ap.add_argument("--model-dir", default=None,
                     help="local model bundle (default: the fasthamer cache)")
     ap.add_argument("--record", default=None, metavar="PATH",
                     help="also write the annotated frames to a video file (.mp4/.avi)")
-    ap.add_argument("--soma", default=os.environ.get("FASTHAMER_SOMA_CKPT"), metavar="CKPT",
-                    help="overlay a SOMA-X hand regressed from the MANO params with mano2soma-x: "
-                         "CKPT is the exported .npz (torch-free numpy engine, ~1 ms/hand) or the "
-                         ".pt checkpoint (torch + py-soma-x engine). Blue = MANO, orange = SOMA-X; key 'o' "
+    ap.add_argument("--soma", nargs="?", const="bundled", default=os.environ.get("FASTHAMER_SOMA_CKPT"),
+                    metavar="CKPT",
+                    help="MANO-vs-SOMA comparison view (forces --hand-model mano, needs your MANO "
+                         "model): draw the SOMA-X hand regressed from the MANO params over the MANO "
+                         "mesh. Without CKPT the bundled SOMA assets are used; CKPT may also be a "
+                         "mano2soma-x .npz or a .pt checkpoint (torch + py-soma-x engine). "
+                         "Blue = MANO, orange = SOMA-X; key 'o' "
                          "cycles the view: blend (both surfaces semi-transparent: a good fit "
                          "shows no colour fringes), flicker (alternates MANO/SOMA 3x per "
                          "second), mano, soma, wire (SOMA surface + MANO wireframe). Needs "
@@ -322,9 +328,15 @@ def main(argv=None) -> int:
     print("[fasthamer] loading model (the first run compiles it for your "
           "device, which can take ~30 s)...", flush=True)
     t = time.time()
+    hand_model = args.hand_model
+    if args.soma and hand_model != "mano":
+        print("[fasthamer] --soma compares MANO with SOMA-X, so --hand-model mano is used",
+              flush=True)
+        hand_model = "mano"
     hands = load(mode="video", max_hands=args.max_hands,
                  detector=args.detector,
                  fasthands_detector=args.fasthands_detector,
+                 hand_model=hand_model,
                  model_dir=args.model_dir,
                  stabilize_handedness=args.stabilize,
                  force_handedness=args.force_handedness,
@@ -333,9 +345,13 @@ def main(argv=None) -> int:
 
     soma = None
     if args.soma:
+        from .assets import resolve_soma_dir, soma_paths
         from .soma import SOMA_COLOR, SomaOverlay
         t = time.time()
-        soma = SomaOverlay(args.soma, lod=args.soma_lod, mano_pkl=args.mano_pkl,
+        ckpt = args.soma
+        if ckpt == "bundled":
+            ckpt = soma_paths(resolve_soma_dir())[0]
+        soma = SomaOverlay(ckpt, lod=args.soma_lod, mano_pkl=args.mano_pkl,
                            regressor=args.soma_regressor, compute_units=args.compute_units)
         engine = soma.engine if soma.engine == "torch" else \
             f"{soma.stage.backend} geometry + {soma.regressor_backend} regressor"

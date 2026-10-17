@@ -34,7 +34,7 @@ def main():
     model_cfg = rt.load_cfg(rt.DEFAULT_CHECKPOINT)
     ref_engine = rt.FullHamerCoreML(os.path.join(ref_bundle, "hamer_mano.mlpackage"),
                                     os.path.join(ref_bundle, "mano_faces.npy"), model_cfg)
-    hm = fasthamer.load(mode="image", model_dir=bundle)
+    hm = fasthamer.load(mode="image", model_dir=bundle, hand_model="mano")
     print(f"bundle under test: {bundle}\nreference bundle:  {ref_bundle}")
 
     mano = None  # lazy: torch MANO layer for test B
