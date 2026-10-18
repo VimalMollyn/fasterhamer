@@ -265,8 +265,13 @@ The mesh stage then runs without torch:
   (fp32, ~0.4 ms). SOMA-X's hand model (identity PCA, closed-form skeleton
   fit, forward kinematics, skinning) is re-implemented in C
   (`fasthamer.soma_np` / `soma_stage.c`, ~0.15 ms per hand) and matches the
-  reference py-soma-x implementation to 0.05 mm. The regressed SOMA hand is
-  within ~2 mm (mean vertex distance) of the MANO mesh HaMeR implies.
+  reference py-soma-x implementation to 0.05 mm. SOMA-X skins with plain LBS,
+  so since the soma-v2 assets (fasthamer 0.8) the regressor also predicts
+  learned vertex correctives on the SOMA topology (a `posedirs`/`shapedirs`
+  pair, added to the bind-pose rest shape before skinning) that remove the
+  LBS pinch at bent joints: the regressed SOMA hand is within 0.15 mm (mean
+  vertex distance, 1.3 mm worst vertex) of the MANO mesh HaMeR implies, versus
+  ~2 mm / 8 mm before.
 - **MANO hand (`hand_model="mano"`).** The MANO mesh (778 vertices) is
   computed in numpy from *your* `MANO_RIGHT.pkl` (`fasthamer.mano`, ~0.5 ms
   per hand, no chumpy/scipy); it matches HaMeR's smplx MANO layer to 1e-7 m.

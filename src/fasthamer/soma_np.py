@@ -10,7 +10,9 @@ Re-implements, from a single exported .npz (see mano2soma-x
      joint orientations by Procrustes alignment with SOMA's Newton-Schulz
      polar decomposition + Kabsch fallback), re-posing to the bind pose;
   3. `SOMAHandLayer.pose()` -- bone-scaled forward kinematics + linear blend
-     skinning.
+     skinning, with the learned mano2soma-x vertex correctives (a SOMA-topology
+     posedirs/shapedirs pair, `corr_*` arrays in the npz) added to the bind-pose
+     rest shape right before skinning when the asset file has them.
 
 The regressor MLP can run either in numpy or as a CoreML model on the Neural
 Engine (`regressor_mlpackage=`, exported by mano2soma-x
@@ -54,6 +56,8 @@ def _load_c_lib() -> ctypes.CDLL:
     lib.soma_destroy.restype = None
     lib.soma_pose.argtypes = [ctypes.c_void_p, ctypes.c_int, D, D, D, D, D, D]
     lib.soma_pose.restype = None
+    lib.soma_pose_offsets.argtypes = [ctypes.c_void_p, ctypes.c_int, D, D, D, D, D, D, D]
+    lib.soma_pose_offsets.restype = None
     _c_lib = lib
     return lib
 
@@ -296,6 +300,14 @@ class SomaStageNumpy:
         # MANO wrist position in MANO's own frame as an affine function of betas
         self.wrist_bias = d["wrist_bias"].astype(np.float64) if "wrist_bias" in d else None
         self.wrist_shapedirs = d["wrist_shapedirs"].astype(np.float64) if "wrist_shapedirs" in d else None
+        # learned vertex correctives (mano2soma-x correctives.py): offsets = bias + f @ posedirs + betas @ shapedirs,
+        # f = the 135 MANO pose features (R_j - I), metres, wrist-local bind-pose frame; optional
+        self.corr_posedirs = self.corr_shapedirs = self.corr_bias = None
+        if "corr_posedirs" in d:
+            self.corr_posedirs = np.ascontiguousarray(d["corr_posedirs"].reshape(135, -1), dtype=np.float64)   # (135, V*3)
+            self.corr_bias = np.ascontiguousarray(d["corr_bias"].reshape(-1), dtype=np.float64)                 # (V*3,)
+            if "corr_shapedirs" in d:
+                self.corr_shapedirs = np.ascontiguousarray(d["corr_shapedirs"].reshape(10, -1), dtype=np.float64)
         # C backend
         self._c = None
         self._ctx = None
@@ -346,6 +358,22 @@ class SomaStageNumpy:
         except Exception:  # noqa: BLE001
             pass
 
+    @property
+    def has_correctives(self) -> bool:
+        return self.corr_posedirs is not None
+
+    def vertex_offsets(self, hand_pose: np.ndarray, betas: np.ndarray) -> Optional[np.ndarray]:
+        """(B,15,3,3), (B,10) -> (B, V*3) corrective offsets in metres, or None without correctives."""
+        if self.corr_posedirs is None:
+            return None
+        hp = np.asarray(hand_pose, np.float64).reshape(-1, 15, 3, 3)
+        B = hp.shape[0]
+        feat = (hp - np.eye(3)).reshape(B, 135)
+        off = self.corr_bias[None, :] + feat @ self.corr_posedirs
+        if self.corr_shapedirs is not None:
+            off = off + np.asarray(betas, np.float64).reshape(B, 10) @ self.corr_shapedirs
+        return off
+
     def _pose_c(self, p: Dict[str, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
         B = p["identity"].shape[0]
         D = ctypes.POINTER(ctypes.c_double)
@@ -354,11 +382,14 @@ class SomaStageNumpy:
         ident = np.ascontiguousarray(p["identity"], dtype=np.float64).reshape(B, NUM_IDENTITY)
         sc = p.get("scale_params")
         scales = None if sc is None else np.ascontiguousarray(sc, dtype=np.float64).reshape(B, NUM_SCALES)
+        off = p.get("vertex_offsets")
+        offsets = None if off is None else np.ascontiguousarray(off, dtype=np.float64).reshape(B, self.num_verts * 3)
         verts = np.empty((B, self.num_verts, 3), dtype=np.float64)
         joints = np.empty((B, NUM_JOINTS, 3), dtype=np.float64)
-        self._c.soma_pose(self._ctx, B, pose.ctypes.data_as(D), root_t.ctypes.data_as(D), ident.ctypes.data_as(D),
-                          None if scales is None else scales.ctypes.data_as(D),
-                          verts.ctypes.data_as(D), joints.ctypes.data_as(D))
+        self._c.soma_pose_offsets(self._ctx, B, pose.ctypes.data_as(D), root_t.ctypes.data_as(D), ident.ctypes.data_as(D),
+                                  None if scales is None else scales.ctypes.data_as(D),
+                                  None if offsets is None else offsets.ctypes.data_as(D),
+                                  verts.ctypes.data_as(D), joints.ctypes.data_as(D))
         return verts, joints
 
     def _load_coreml_regressor(self, mlpackage: str, compute_units: str) -> None:
@@ -436,7 +467,8 @@ class SomaStageNumpy:
             go = np.asarray(global_orient, np.float64).reshape(B, 3, 3)
             rot = np.concatenate([(go @ rot[:, 0])[:, None], rot[:, 1:]], axis=1)
             root_t = np.einsum("bij,bj->bi", go, root_t)
-        return dict(pose=rot, root_translation=root_t, identity=identity, scale_params=scales)
+        return dict(pose=rot, root_translation=root_t, identity=identity, scale_params=scales,
+                    vertex_offsets=self.vertex_offsets(hand_pose, betas))
 
     # ---- SOMA geometry --------------------------------------------------------
     def rest_shape(self, identity: np.ndarray) -> np.ndarray:
@@ -532,6 +564,8 @@ class SomaStageNumpy:
         lt = local_t.copy(); lt[:, 0] = self.bind_root_t
         T_bind = self._fk(np.broadcast_to(self.bind_local_R, (B, NUM_JOINTS, 3, 3)), lt)
         rest_bind = self._lbs(rest, self.skin_W, T_bind @ _se3_inverse(T_fit))
+        if p.get("vertex_offsets") is not None:   # learned correctives, same injection point as SOMA-X's own
+            rest_bind = rest_bind + np.asarray(p["vertex_offsets"], np.float64).reshape(B, -1, 3)
         # pose
         local_t = self._local_translations(T_bind)
         if p.get("scale_params") is not None:

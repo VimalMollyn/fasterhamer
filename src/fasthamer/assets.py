@@ -59,11 +59,13 @@ ASSETS_URL = ("https://github.com/VimalMollyn/fasterhamer/releases/download/"
 ASSETS_SHA256: Optional[str] = \
     "5ff4745a5a0cc48b1bd18e55867f177cccb982d1dc1dd1d6b06090c3e0a5e7d8"
 
-SOMA_ASSETS_VERSION = 1
+# v2 (2026-10-18): regressor fine-tuned with learned vertex correctives on the SOMA
+# topology (fixes the LBS pinch at bent joints; `corr_*` arrays in the npz).
+SOMA_ASSETS_VERSION = 2
 SOMA_ASSETS_URL = ("https://github.com/VimalMollyn/fasterhamer/releases/download/"
                    f"soma-v{SOMA_ASSETS_VERSION}/fasthamer-soma-v{SOMA_ASSETS_VERSION}.zip")
 SOMA_ASSETS_SHA256: Optional[str] = \
-    "cfffbcbb60f61259635dde868fbf13232c7dae3660e394359c3351210ba6783d"
+    "14e018b3f931968d9f89f51a68812ef72b1ba35f8d88d6d9a569d84d4e886122"
 SOMA_NPZ_NAME = "mano2somax_resmlp512x4_numpy.npz"
 SOMA_REGRESSOR_NAME = "mano2somax_regressor_fp32.mlpackage"
 

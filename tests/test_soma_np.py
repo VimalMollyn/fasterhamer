@@ -41,10 +41,17 @@ def main():
     net = ManoToSomaX.from_checkpoint(CKPT, device="cpu")
     layer = SOMAHandLayer(hand_type="right", device="cpu", identity_model_type="soma",
                           lod="mid", correctives_model_path=None)
+    try:
+        from mano_to_somax.infer import pose_soma   # applies the learned vertex correctives, if the model has them
+    except ImportError:
+        pose_soma = None
 
     def ref(hp, b, go):
         with torch.no_grad():
             p = net(hp, b, global_orient=go)
+            if pose_soma is not None:
+                v, j = pose_soma(layer, p)
+                return v.numpy(), j.numpy()
             layer.prepare_identity(p["identity"], scale_params=p["scale_params"])
             o = layer.pose(p["pose"], pose2rot=False, absolute_pose=True,
                            global_translation=p["root_translation"])

@@ -64,6 +64,11 @@ class SomaOverlay:
         self.net = ManoToSomaX.from_checkpoint(checkpoint, device=device)
         self.layer = SOMAHandLayer(hand_type="right", device=device, identity_model_type="soma",
                                    lod=lod, correctives_model_path=None)
+        try:   # learned vertex correctives (mano2soma-x >= f91b928)
+            from mano_to_somax.correctives import pose_with_offsets
+            self._pose_with_offsets = pose_with_offsets
+        except ImportError:
+            self._pose_with_offsets = None
         self.faces = self.layer.faces.detach().cpu().numpy().astype(np.int64)
         self.num_verts = int(self.faces.max()) + 1
 
@@ -95,11 +100,17 @@ class SomaOverlay:
         with torch.no_grad():
             p = self.net(eye.repeat(1, 15, 1, 1), torch.zeros(1, 10, device=self.device),
                          global_orient=eye[None])
-            self.layer.prepare_identity(p["identity"], scale_params=p["scale_params"])
-            self.layer.pose(p["pose"], pose2rot=False, absolute_pose=True,
-                            global_translation=p["root_translation"])
+            self._torch_vertices(p)
             if self._interp is not None:
                 self._interp(torch.zeros(1, 778, 3, device=self.device))
+
+    def _torch_vertices(self, p: dict):
+        """prepare_identity + pose with the regressed params (and the vertex correctives, if any) -> (B, V, 3)."""
+        self.layer.prepare_identity(p["identity"], scale_params=p["scale_params"])
+        if p.get("vertex_offsets") is not None and self._pose_with_offsets is not None:
+            return self._pose_with_offsets(self.layer, p["pose"], p["root_translation"], p["vertex_offsets"])[0]
+        return self.layer.pose(p["pose"], pose2rot=False, absolute_pose=True,
+                               global_translation=p["root_translation"])["vertices"]
 
     def _init_numpy(self, npz: str, regressor: str, compute_units: str) -> None:
         from .soma_np import SomaStageNumpy
@@ -173,9 +184,7 @@ class SomaOverlay:
 
         with torch.no_grad():
             p = self.net(hp, betas, global_orient=go)
-            self.layer.prepare_identity(p["identity"], scale_params=p["scale_params"])
-            soma = self.layer.pose(p["pose"], pose2rot=False, absolute_pose=True,
-                                   global_translation=p["root_translation"])["vertices"]  # (B, V, 3)
+            soma = self._torch_vertices(p)  # (B, V, 3)
             errs: List[Optional[float]] = [None] * B
             if self._interp is not None:
                 mano = np.stack([self._right_frame(h.vertices, h.is_right) for h in hands])

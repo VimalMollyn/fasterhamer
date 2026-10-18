@@ -247,8 +247,10 @@ void soma_destroy(void *ctx) {
 
 // pose (B,J,3,3) absolute-local rotations, root_t (B,3), identity (B,K), scales (B,J-1) or NULL
 // -> verts (B,V,3), joints (B,J,3)
-void soma_pose(void *ctx, int B, const double *pose, const double *root_t, const double *identity,
-               const double *scales, double *out_verts, double *out_joints) {
+// Like soma_pose(), with optional per-vertex offsets (B,V,3) added to the bind-pose rest shape
+// right before skinning: the learned mano2soma-x correctives (same injection point as SOMA-X's own).
+void soma_pose_offsets(void *ctx, int B, const double *pose, const double *root_t, const double *identity,
+                       const double *scales, const double *offsets, double *out_verts, double *out_joints) {
     soma_ctx *c = (soma_ctx *)ctx;
     const int V = c->V, J = c->J, K = c->K;
     double *rest = c->rest, *rest_bind = c->rest_bind, *t = c->t, *R = c->R;
@@ -312,6 +314,7 @@ void soma_pose(void *ctx, int B, const double *pose, const double *root_t, const
         memcpy(lt, c->bind_root_t, 3 * sizeof(double));
         fk(c, c->bind_local_R, lt, Rw, tw);                       // T_bind
         lbs(c, rest, Rw, tw, R, t, c->bone_R, c->bone_t, rest_bind);
+        if (offsets) { const double *o = offsets + (size_t)b*V*3; for (int i = 0; i < V*3; i++) rest_bind[i] += o[i]; }
         memcpy(Rb, Rw, sizeof(double) * J * 9); memcpy(tb, tw, sizeof(double) * J * 3);
         // 6. pose: bone-scaled local translations of T_bind, root = root_t
         local_translations(c, Rb, tb, lt);
@@ -321,4 +324,9 @@ void soma_pose(void *ctx, int B, const double *pose, const double *root_t, const
         lbs(c, rest_bind, Rw, tw, Rb, tb, c->bone_R, c->bone_t, out_verts + (size_t)b*V*3);
         memcpy(out_joints + (size_t)b*J*3, tw, sizeof(double) * J * 3);
     }
+}
+
+void soma_pose(void *ctx, int B, const double *pose, const double *root_t, const double *identity,
+               const double *scales, double *out_verts, double *out_joints) {
+    soma_pose_offsets(ctx, B, pose, root_t, identity, scales, NULL, out_verts, out_joints);
 }
