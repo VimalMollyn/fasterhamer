@@ -5,6 +5,13 @@ the Apple Neural Engine. Give it an image, get a 3D hand mesh, MANO
 parameters, 3D joints, camera parameters, and 2D joints per hand — a
 MediaPipe-Hands-style API, but with a full 3D hand mesh behind it.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/VimalMollyn/fasterhamer/main/assets/demo.gif" width="600" alt="fasthamer-webcam: live 3D hand meshes on both hands at ~26 FPS">
+  <br>
+  <em><code>fasthamer-webcam</code>: live 3D meshes on two hands at ~26 FPS
+  (<a href="https://github.com/VimalMollyn/fasterhamer/blob/main/assets/demo.mp4">MP4</a>)</em>
+</p>
+
 - **Fast**: the whole network (ViT-H backbone + MANO head) runs as one CoreML
   program on the ANE and the mesh stage takes ~0.6 ms per hand — ~30 FPS
   end-to-end with two hands at 640px on a fanless M4 MacBook Air, torch-free
